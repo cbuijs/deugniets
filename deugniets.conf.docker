@@ -1,0 +1,16 @@
+[DEUGNIETS]
+port = 53
+
+nameservers = ["9.9.9.9", "149.112.112.9", "2620:fe::9", "2620:fe::fe:9"]
+
+optimize = false
+whitelist = ["safesearch.docker", "https://raw.githubusercontent.com/cbuijs/accomplist/master/deugniets/deugniets.white.list"]
+blacklist = ["https://raw.githubusercontent.com/cbuijs/accomplist/master/deugniets/deugniets.black.list"]
+
+blacklist_rcode = "REFUSED"
+tld_rcode = "NXDOMAIN"
+redirect_ip = ["0.0.0.0", "::"]
+
+check_tld = true
+tld_url = "https://data.iana.org/TLD/tlds-alpha-by-domain.txt"
+
