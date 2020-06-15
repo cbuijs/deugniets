@@ -1,0 +1,105 @@
+diff --git a/deugniets.py b/deugniets.py
+index eb1cbbd..1111282 100644
+--- a/deugniets.py
++++ b/deugniets.py
+@@ -1,7 +1,7 @@
+ #!/usr/bin/env python3
+ '''
+ ===========================================================================
+- deugniets.py v2.663-20200103 Copyright 2019-2020 by cbuijs@chrisbuijs.com
++ deugniets.py v2.664-20200103 Copyright 2019-2020 by cbuijs@chrisbuijs.com
+ ===========================================================================
+ 
+  Based on: https://github.com/supriyo-biswas/adblock-dns-server
+@@ -141,7 +141,7 @@ command_acl6['0::1/128'] = True
+ private4 = pytricia.PyTricia(32, socket.AF_INET)
+ private6 = pytricia.PyTricia(128, socket.AF_INET6)
+ 
+-check_cache = dict()
++#check_cache = dict()
+ 
+ # vars
+ dummy = '#!#!DUMMY!#!#'
+@@ -199,19 +199,25 @@ is_geo = regex.compile('^@[a-z/\s]+$', regex.I)
+ #####################################################################
+ 
+ # Replace socket.getaddrinfo with caching version to speedup requests/urllib/abuseipdb
+-def _getaddrinfo(host, port=53, family=0, type=0, proto=0, flags=0):
++def _getaddrinfo(host, port=53, family=0, typ=0, proto=0, flags=0):
+     cachename = '{0}/{1}/GETADDRINFO'.format(host, port)
+-    #logging.debug('GETADDRINFO: {0} {1} {2} {3} {4} {5}'.format(host, port, family, type, proto, flags))
++    #logging.debug('GETADDRINFO: {0} {1} {2} {3} {4} {5}'.format(host, port, family, typ, proto, flags))
+     result = cache.get(cachename)
+     tag = 'CACHE-HIT'
+     if result is None:
+         tag = 'CACHED'
+-        result = _socket.getaddrinfo(host, port, family, type, proto, flags)
++        try:
++            result = _socket.getaddrinfo(host, port, family, typ, proto, flags)
++        except BaseException as err:
++            logging.error('GETADDRINFO-ERROR: {0} - {1}'.format(host, err))
++
++    if result:
+         #logging.info('GETADDRINFO-RESULT: {0}'.format(result))
+-        cache.add(obj=CachedObject(name=cachename, obj=result, ttl=config['min_ttl'])) # Cache 40 mins, see: https://blog.apnic.net/2019/11/12/stop-using-ridiculously-low-dns-ttls/
++        ips = list((map(lambda x: x[4][0], result)))
++        if ips:
++            cache.add(obj=CachedObject(name=cachename, obj=result, ttl=config['min_ttl'])) # Cache 40 mins, see: https://blog.apnic.net/2019/11/12/stop-using-ridiculously-low-dns-ttls/
++            #logging.debug('GETADDRINFO-{0}: {1} -> {2}'.format(tag, host, ', '.join(ips)))
+ 
+-    ips = list((map(lambda x: x[4][0], result)))
+-    logging.info('GETADDRINFO-{0}: {1} -> {2}'.format(tag, host, ', '.join(ips)))
+     return result
+ 
+ socket.getaddrinfo = _getaddrinfo
+@@ -980,23 +986,23 @@ def check_rx(valuetype, testvalue, rxlst, tag):
+ 
+ def check_dom(valuetype, testvalue, domlist, listname, onlyparent, smart):
+     '''Match domain against list, works for subdomains too'''
+-    check_name = False
+-    if listname:
+-        check_name = '{0}/{1}'.format(testvalue, listname)
+-        if check_name in check_cache:
+-            return check_cache.get(check_name, False)
++    #check_name = False
++    #if listname:
++    #    check_name = '{0}/{1}'.format(testvalue, listname)
++    #    if check_name in check_cache:
++    #        return check_cache.get(check_name, False)
+ 
+     if testvalue in domlist:
+         if config['log_hits'] and listname:
+             logging.warning('{0}-DOM-HIT [{1}]: \"{2}\" -> \"{2}\"'.format(valuetype, listname, testvalue))
+-        if check_name:
+-            check_cache[check_name] = testvalue
++    #    if check_name:
++    #        check_cache[check_name] = testvalue
+         return testvalue
+ 
+     fqdn = check_dom_walk(valuetype, testvalue, domlist, listname, onlyparent)
+     if fqdn:
+-        if check_name:
+-            check_cache[check_name] = fqdn
++    #    if check_name:
++    #        check_cache[check_name] = fqdn
+         return fqdn
+ 
+     if smart:
+@@ -1008,12 +1014,13 @@ def check_dom(valuetype, testvalue, domlist, listname, onlyparent, smart):
+             if fqdn and fqdn.count('.') > 1:
+                 if config['log_hits'] and listname:
+                     logging.warning('{0}-SMARTDOM-HIT [{1}]: \"{2}\" -> \"{3}\"'.format(valuetype, listname, testvalue, fqdn))
+-                if check_name:
+-                    check_cache[check_name] = fqdn
++    #            if check_name:
++    #                check_cache[check_name] = fqdn
+                 return fqdn
+ 
+-    if check_name:
+-        check_cache[check_name] = False
++    #if check_name:
++    #    check_cache[check_name] = False
++
+     return False
+ 
+ 

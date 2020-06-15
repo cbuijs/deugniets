@@ -1,0 +1,173 @@
+diff --git a/deugniets.conf b/deugniets.conf
+index 007161b..9a6dce2 100644
+--- a/deugniets.conf
++++ b/deugniets.conf
+@@ -28,10 +28,10 @@ port = 53001
+ #nameservers = ["127.0.0.1", "::1"]
+ 
+ #nameservers = ["https://ipv4.dns.nextdns.io/126ab2/nuc-deugniets-https4", "https://ipv6.dns.nextdns.io/126ab2/nuc-deugniets-https6", "45.90.28.131", "45.90.30.131", "2a07:a8c0::12:6ab2", "2a07:a8c1::12:6ab2"]
+-#nameservers = ["https://ipv4.dns.nextdns.io/126ab2/nuc-deugniets-https4", "https://ipv6.dns.nextdns.io/126ab2/nuc-deugniets-https6"]
++nameservers = ["https://ipv4.dns.nextdns.io/126ab2/nuc-deugniets-https4", "https://ipv6.dns.nextdns.io/126ab2/nuc-deugniets-https6"]
+ #nameservers = ["https://dns.nextdns.io/126ab2/nuc-deugniets-https"]
+ #nameservers = ["45.90.28.131", "45.90.30.131", "2a07:a8c0::12:6ab2", "2a07:a8c1::12:6ab2"]
+-nameservers = ["tls://nuc-deugniets-126ab2.dns.nextdns.io"]
++#nameservers = ["tls://nuc-deugniets-126ab2.dns.nextdns.io"]
+ 
+ # DNS Servers to forward to
+ #nameservers = ["1.1.1.1", "1.0.0.1", "8.8.8.8", "8.8.4.4", "9.9.9.10", "149.112.112.10"]
+@@ -45,7 +45,6 @@ nameservers = ["tls://nuc-deugniets-126ab2.dns.nextdns.io"]
+ # XS4ALL
+ #nameservers = ["tls://resolver.xs4all.nl"]
+ #nameservers = ["194.109.6.66", "194.109.9.99", "194.109.104.104", "2001:888:0:6::66", "2001:888:0:9::99"]
+-#nameservers = ["tls://resolver.xs4all.nl"]
+ # Cleanbrowsing AdultFilter
+ #nameservers = ["185.228.168.10", "185.228.169.11", "2a0d:2a00:1::1", "2a0d:2a00:2::1"]
+ # AdGuard Family
+@@ -81,6 +80,12 @@ parent_cache_hit = true
+ blockip4 = false
+ blockip6 = false
+ 
++# Block ANY RRType
++blockany = false
++
++# Block root
++blockroot = false
++
+ # Logging
+ log_requests = true
+ log_responses = true
+@@ -119,6 +124,9 @@ unfilter_whitelist = false
+ fix_noerror = false
+ fix_nxdomain = false
+ 
++# Minimal Responses
++min_resp = false
++
+ # White/Blacklists
+ # See: https://github.com/cbuijs/accomplist/tree/master/standard
+ optimize = false
+@@ -130,3 +138,4 @@ optimize = false
+ whitelist = ["/opt/deugniets/forwarders.list", "/opt/deugniets/alias.list", "/opt/deugniets/unfilter.list", "/opt/deugniets/doh.alias.list", "/opt/accomplist/chris/connectivity-check.list", "/opt/accomplist/deugniets/deugniets.white.list", "/opt/accomplist/chris/white.special", "/opt/accomplist/chris/private-addresses.list"]
+ #blacklist = ["/opt/deugniets/black.list", "/opt/accomplist/deugniets/deugniets.black.list","/opt/accomplist/family-safe/deugniets.black.list", "/opt/accomplist/malicious-ip/deugniets.black.list"]
+ 
++
+diff --git a/deugniets.py b/deugniets.py
+index bc4ff36..eee9138 100644
+--- a/deugniets.py
++++ b/deugniets.py
+@@ -1,7 +1,7 @@
+ #!/usr/bin/env python3
+ '''
+ =======================================================================
+- deugniets.py v2.57-20191115 Copyright 2019 by cbuijs@chrisbuijs.com
++ deugniets.py v2.575-20191120 Copyright 2019 by cbuijs@chrisbuijs.com
+ =======================================================================
+ 
+  Based on: https://github.com/supriyo-biswas/adblock-dns-server
+@@ -648,7 +648,7 @@ def is_formerr(rtype, value, qtype):
+         # Request qname
+         if rtype in ('CHAIN-NAME', 'REQUEST'):
+             # Root
+-            if value == '.':
++            if value == '.' and config['blockroot']:
+                 logging.warning('{0}-FORMERR-HIT: {1}/{2} - Root'.format(rtype, value, qtype))
+                 return True
+ 
+@@ -658,14 +658,15 @@ def is_formerr(rtype, value, qtype):
+                 return True
+ 
+             # Not a domain-name
+-            if not is_dom.search(value):
+-                logging.warning('{0}-FORMERR-HIT: {1}/{2} - Name not a valid Domain-Name'.format(rtype, value, qtype))
+-                return True
++            if value != '.':
++                if not is_dom.search(value):
++                    logging.warning('{0}-FORMERR-HIT: {1}/{2} - Name not a valid Domain-Name'.format(rtype, value, qtype))
++                    return True
+ 
+-            # Undotted name
+-            if value.strip('.').count('.') < 1:
+-                logging.warning('{0}-FORMERR-HIT: {1}/{2} - Name not dotted'.format(rtype, value, qtype))
+-                return True
++                # Undotted name
++                if value.strip('.').count('.') < 1:
++                    logging.warning('{0}-FORMERR-HIT: {1}/{2} - Name not dotted'.format(rtype, value, qtype))
++                    return True
+     
+             # PTR records that do not comply with IP-Addresses
+             if qtype == 'PTR' and (not iparpa.search(value)):
+@@ -1136,7 +1137,11 @@ def dns_query(name, rdclass, rdtype, qid, cip, unfilter, fttl):
+         logging.warning('ACL-BLACKLIST-HIT [{0}]: Client {1} -> {2}'.format(qid, cip, bl_ip6.get_key(cip)))
+         return (dns.rcode.REFUSED, [], [], [])
+ 
+-    if qrdtype in ('ANY', 'AXFR', 'HINFO', 'IXFR', 'NONE', 'OPT'):
++    if qrdtype == 'ANY' and config['blockany']:
++        logging.warning('BLOCK-ANY-HIT [{0}]: {1}'.format(qid, cachename, qrdtype))
++        return (dns.rcode.REFUSED, [], [], [])
++
++    if qrdtype in ('AXFR', 'HINFO', 'IXFR', 'NONE', 'OPT'):
+         logging.warning('RRTYPE-NOTIMP-HIT [{0}]: {1} -> {2}'.format(qid, qname, qrdtype))
+         return (dns.rcode.NOTIMP, [], [], [])
+ 
+@@ -1619,6 +1624,11 @@ def dox_request(qid, qname, rdtype, cachename, urls, rfc8484, cip):
+     global requests_session
+ 
+     message = dns.message.make_query(encode_0x20(qname), rdtype)
++    # Fixup for ANY
++    # https://stackoverflow.com/questions/17681230/how-make-dns-queries-in-dns-python-as-dig-with-additional-records-section
++    if rdtype == dns.rdatatype.ANY:
++        message.flags |= dns.flags.AD
++        message.find_rrset(message.additional, dns.name.root, 65535, dns.rdatatype.OPT, create=True, force_unique=True)
+ 
+     cso = False
+     if config['use_ecs_ip'] and cip and is_ip.search(cip):
+@@ -1639,9 +1649,11 @@ def dox_request(qid, qname, rdtype, cachename, urls, rfc8484, cip):
+             if url:
+                 retries += 1
+ 
+-                # DOH !!! This might get replaced with dnspython query.https/query.doh (see query.tls) when it comes out
++                # DOH
++                # !!! This might get replaced with dnspython query.https/query.doh (see query.tls) when it comes out
+                 # https://github.com/rthalley/dnspython/pull/393
+                 # https://github.com/rthalley/dnspython/issues/358
++                # !!! TO-DO: Use ourselfs to resolve hostname in URL (bootstrap), or stick in hosts-file
+                 if url.startswith('https://'):
+                     message.id = 0 # DoH requests this
+                     rcode = 500
+@@ -2083,6 +2095,7 @@ def run_server():
+ 
+     logging.info('SERVER: DeugNietS Started - Accepting DNS requests on port {0}'.format(dnsport))
+ 
++    # !!! TODO: Define bootstrap servers to use to resolve below
+     newnameservers = list()
+     for dnsserver in config['nameservers']:
+         if dnsserver.startswith('tls://'):
+@@ -2092,6 +2105,7 @@ def run_server():
+             for ip in ips:
+                 newentry = 'tls://{0}#{1}'.format(hostname, ip)
+                 newnameservers.append(newentry)
++
+         else:
+             newnameservers.append(dnsserver)
+ 
+@@ -2162,6 +2176,8 @@ if __name__ == '__main__':
+     # Block IP related answers
+     config['blockip4'] = False
+     config['blockip6'] = True
++    config['blockany'] = True
++    config['blockroot'] = True
+     config['smartip'] = True
+     config['ignoreip'] = False
+     config['blockweird'] = True
+diff --git a/requirements.txt b/requirements.txt
+index b1e7933..243f329 100644
+--- a/requirements.txt
++++ b/requirements.txt
+@@ -4,6 +4,7 @@ dnspython>=2.0.0
+ hyper>=0.7.0
+ idna>=2.8
+ IPy>=1.0
++python-hosts>=0.4.7         
+ pytricia>=1.0.0
+ regex>=2019.6.8
+ requests>=2.22.0

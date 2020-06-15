@@ -1,0 +1,24 @@
+diff --git a/deugniets.py b/deugniets.py
+index 60fb6aa..a219884 100644
+--- a/deugniets.py
++++ b/deugniets.py
+@@ -416,12 +416,14 @@ def agg_ip(iplist, listname, fam):
+ 
+ 
+ def make_doms(domlist):
+-    newdomlist = set()
+-    for dom in domlist:
+-        if is_dom.search(dom):
+-            newdomlist.add(make_dom(dom))
++    if domlist:
++        newdomlist = set()
++        for dom in domlist:
++            if is_dom.search(dom):
++                newdomlist.add(make_dom(dom))
+ 
+-    return newdomlist
++        return newdomlist
++    return domlist
+ 
+ 
+ def make_dom(domname):

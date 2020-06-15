@@ -1,0 +1,470 @@
+diff --git a/deugniets.py b/deugniets.py
+index 44d16b7..c9df9ba 100644
+--- a/deugniets.py
++++ b/deugniets.py
+@@ -1,7 +1,7 @@
+ #!/usr/bin/env python3
+ '''
+ ===========================================================================
+- deugniets.py v2.783-20200403 Copyright 2019-2020 by cbuijs@chrisbuijs.com
++ deugniets.py v2.79-20200404 Copyright 2019-2020 by cbuijs@chrisbuijs.com
+ ===========================================================================
+ 
+  Based on: https://github.com/supriyo-biswas/adblock-dns-server
+@@ -26,7 +26,6 @@
+  - Bootstrap servers for getaddrinfo
+  - Check/Investigate/Use Twisted names framework - Backburner
+  - Unduplicate check_dom matches - Added cache
+- - Check purpose of 'smartdoms'
+ 
+ Done:
+ 
+@@ -143,7 +142,6 @@ command_acl4 = pytricia.PyTricia(32, socket.AF_INET)
+ command_acl6 = pytricia.PyTricia(128, socket.AF_INET6)
+ 
+ command_acl4['127.0.0.1/32'] = True
+-command_acl4['192.168.0.0/16'] = True
+ command_acl6['0::1/128'] = True
+ 
+ private4 = pytricia.PyTricia(32, socket.AF_INET)
+@@ -826,11 +824,11 @@ def check_blacklisted(testvalue, valuetype, checkip):
+     if checkip is False and is_dom.search(testvalue):
+         #logging.debug('CHECK-{0}: \"{1}\" is a DOMAIN'.format(valuetype, testvalue))
+         if check_dom(valuetype, testvalue, wl_dom, 'WHITELIST', False, False): # Whitelisted
+-            return False
+-        #   if config['smartdoms'] and (check_dom(valuetype, testvalue, bl_dom, 'BLACKLIST', False, True) or check_rx(valuetype, testvalue, bl_rx, bl_big_rx, 'BLACKLIST')): # Blacklisted
+-        #       return True
++            if config['block_specific'] and testvalue in bl_dom:
++                logging.warning('SPECIFIC-NAME-DOM-HIT [BLACKLIST]: \"{0}\" -> \"{0}\"'.format(testvalue))
++                return True
+ 
+-        #   return False
++            return False
+ 
+         if check_rx(valuetype, orgtestvalue, wl_rx, wl_big_rx, 'WHITELIST'):
+             return False
+@@ -1014,7 +1012,7 @@ def check_dom_walk(valuetype, testvalue, domlist, listname, onlyparent):
+ 
+         if fqdn in domlist:
+             if config['log_hits'] and listname:
+-                logging.warning('{0}-DOM-HIT [{1}]: \"{2}\" -> \"{3}\"'.format(valuetype, listname, testvalue, fqdn))
++                logging.warning('{0}-DOMWALK-HIT [{1}]: \"{2}\" -> \"{3}\"'.format(valuetype, listname, testvalue, fqdn))
+ 
+             return fqdn
+ 
+@@ -1224,14 +1222,14 @@ def collapse(name, answer, qid):
+                     addrs = list(map(str, rrset))
+ 
+                     if addrs:
+-                        newaddrs = newaddrs + addrs
++                        #newaddrs = newaddrs + addrs
++                        newaddrs += addrs
+                         new_answer.append(dns.rrset.from_text_list(name, ttl, 'IN', dns.rdatatype.to_text(rrset.rdtype), addrs))
+ 
+-                else:
++                elif config['log_collapse']:
+                     for r in list(map(str, rrset)):
+                         removed -= 1
+-                        if config['log_collapse'] and config['log_verbose']:
+-                            logging.info('COLLAPSE [{0}]: Removed CNAME \"{1}\" -> \"{2}\" ({3})'.format(qid, rrname, r, removed))
++                        logging.info('COLLAPSE [{0}]: Removed CNAME \"{1}\" -> \"{2}\" ({3})'.format(qid, rrname, r, removed))
+ 
+             if new_answer:
+                 if config['log_collapse']:
+@@ -1285,41 +1283,6 @@ def dnsl_check(dnsl, value, isip):
+     return False
+ 
+ 
+-# !!! Absolet
+-def dns_request(qid, cachename, qname, rdtype, addrs):
+-    result = None
+-    rcode = dns.rcode.SERVFAIL
+-
+-    #logging.info('REQUEST-TYPE [{0}]: {1} = {2}'.format(qid, rdtype, str(dns.rdatatype.to_text(rdtype))))
+-
+-    try:
+-        dns.resolver.default_resolver.nameservers = addrs
+-        dns.resolver.default_resolver.port = 53
+-        result = dns.resolver.query(encode_0x20(qname), rdtype, raise_on_no_answer=True)
+-        if result:
+-            rcode = result.response.rcode
+-
+-    except dns.exception.DNSException as e:
+-        #logging.debug('RESPONSE-EXCEPTION [{0}]: {1}'.format(qid, e))
+-        if isinstance(e, dns.resolver.NXDOMAIN):
+-            logging.info('RESPONSE-FROM-SERVER [{0}]: {1} = NXDOMAIN'.format(qid, cachename))
+-            rcode = dns.rcode.NXDOMAIN
+-        elif isinstance(e, dns.resolver.NoMetaqueries):
+-            result = None
+-            logging.error('METAQUERY [{0}]: {1} = REFUSED'.format(qid, cachename, e))
+-            rcode = dns.rcode.REFUSED
+-        elif isinstance(e, dns.resolver.NoAnswer):
+-            result = None
+-            logging.info('RESPONSE-FROM-SERVER [{0}]: {1} = NODATA/NOERROR'.format(qid, cachename))
+-            rcode = dns.rcode.NOERROR
+-        else:
+-            result = None
+-            logging.error('SERVFAIL [{0}]: {1} = {2}'.format(qid, cachename, e))
+-            rcode = dns.rcode.SERVFAIL
+-
+-    return result, rcode
+-
+-
+ def dns_query(name, rdclass, rdtype, qid, cip, unfilter, fttl):
+     '''Do DNS Query and process'''
+     # Get from cache
+@@ -1337,9 +1300,9 @@ def dns_query(name, rdclass, rdtype, qid, cip, unfilter, fttl):
+             cachename = '{0}/PUBLIC'.format(cachename)
+ 
+         if config['use_ecs_ip']:
+-            tag = "IP4"
++            tag = 'IP4'
+             if cip.find(':') > 0:
+-                tag = "IP6"
++                tag = 'IP6'
+ 
+             cachename = '{0}/{1}'.format(cachename, tag)
+ 
+@@ -1350,23 +1313,20 @@ def dns_query(name, rdclass, rdtype, qid, cip, unfilter, fttl):
+         #fttl = config['unfilter_ttl']
+         cachename = '{0}/{1}'.format(cachename, cip)
+ 
+-    if qrdtype == 'ANY' and config['blockany']:
+-        logging.warning('BLOCK-ANY-HIT [{0}]: {1}'.format(qid, cachename))
+-        return (dns.rcode.REFUSED, [], [], [])
+-
+-    # Absolete, Experimental or not used
+-    # https://www.iana.org/assignments/dns-parameters/dns-parameters.xhtml
+-    if qrdtype in ('A6', 'AXFR', 'DLV', 'HINFO', 'IXFR', 'LOC', 'MAILA', 'MAILB', 'MB', 'MF', 'MG', 'MR', 'NONE', 'NULL', 'NXT', 'OPT', 'RP', 'SPF', 'WKS', 'X25'):
+-        logging.warning('RRTYPE-NOTIMP-HIT [{0}]: {1} -> {2}'.format(qid, qname, qrdtype))
+-        return (dns.rcode.NOTIMP, [], [], [])
++    else:
++        if qrdtype == 'ANY' and config['blockany']:
++            logging.warning('BLOCK-ANY-HIT [{0}]: {1}'.format(qid, cachename))
++            return (dns.rcode.REFUSED, [], [], [])
+ 
+-    #if is_ip.search(cip) and (cip in wl_ip4 or cip in wl_ip6):
+-    #    logging.warning('ACL-WHITELIST-HIT [{0}]: Client {1} -> UNFILTER'.format(qid, cip))
+-    #    unfilter = True
++        # Absolete, Experimental or not used
++        # https://www.iana.org/assignments/dns-parameters/dns-parameters.xhtml
++        if qrdtype in ('A6', 'AXFR', 'DLV', 'HINFO', 'IXFR', 'LOC', 'MAILA', 'MAILB', 'MB', 'MF', 'MG', 'MR', 'NONE', 'NULL', 'NXT', 'OPT', 'RP', 'SPF', 'WKS', 'X25'):
++            logging.warning('RRTYPE-NOTIMP-HIT [{0}]: {1} -> {2}'.format(qid, qname, qrdtype))
++            return (dns.rcode.NOTIMP, [], [], [])
+ 
+-    if is_formerr('REQUEST', qname, qrdtype):
+-        #return (dns.rcode.SERVFAIL, [], [], [])
+-        return (dns.rcode.FORMERR, [], [], [])
++        if is_formerr('REQUEST', qname, qrdtype):
++            #return (dns.rcode.SERVFAIL, [], [], [])
++            return (dns.rcode.FORMERR, [], [], [])
+ 
+     rv = None
+     returnstatus = 'OK'
+@@ -1431,7 +1391,7 @@ def dns_query(name, rdclass, rdtype, qid, cip, unfilter, fttl):
+             return (dns.rcode.REFUSED, [], [], [])
+ 
+         logging.info('COMMAND-FINISHED: {0}'.format(command))
+-        soa = dns.rrset.from_text(qname, 0, 'IN', 6, "finished.command. {0}. {1} 60 60 60 60".format(command.lower(), int(time.time())))
++        soa = dns.rrset.from_text(qname, 0, 'IN', 6, 'finished.command. {0}. {1} 60 60 60 60'.format(command.lower(), int(time.time())))
+         return (dns.rcode.NOERROR, [], [soa], [])
+  
+ 
+@@ -1448,10 +1408,15 @@ def dns_query(name, rdclass, rdtype, qid, cip, unfilter, fttl):
+     rcachename = '/'.join(cachename.split('/')[1:])
+     
+     maxparentcount = lcachename.count('.') - 1
++    first = True
+     while parentcount < maxparentcount:
+-        parentcount += 1
+-        parentcachename = '.'.join(lcachename.split('.')[parentcount:])
+-        gcachename = '{0}/{1}'.format(parentcachename, rcachename)
++        if first:
++            first = False
++            gcachename = cachename
++        else:
++            parentcount += 1
++            parentcachename = '.'.join(lcachename.split('.')[parentcount:])
++            gcachename = '{0}/{1}'.format(parentcachename, rcachename)
+ 
+         result = cache.get(gcachename)
+         if result is not None:
+@@ -1491,43 +1456,40 @@ def dns_query(name, rdclass, rdtype, qid, cip, unfilter, fttl):
+             break
+ 
+     matchf = check_dom('NAME', qname, forwarder, 'FORWARDER', False, False)
+-    if rv is None and config['filtering'] and config['filter_request'] and unfilter is False and (not matchf):
++    if rv is None and config['filtering'] and config['filter_request'] and unfilter is False and matchf is False:
+         #logging.debug('REQUEST-QNAME-CHECK [{0}]: {1}'.format(qid, qname))
+ 
+         wmatch = is_blacklisted(qname, 'NAME', False) # Due first, faster due to caching of previous results
++        if wmatch is True:
++            blacklistname = qname
++            returnstatus = 'BLACKLISTED'
++            rv = (config['blacklist_rcode'], [], [], [])
+ 
+-        if config['block_specific'] and (wmatch is False) and (qname in bl_dom):
+-            logging.warning('SPECIFIC-NAME-DOM-HIT [BLACKLIST]: \"{0}\" -> \"{0}\"'.format(qname))
+-            wmatch = True
+-
+-        if rv is None:
+-            if wmatch is True:
+-                blacklistname = qname
+-                returnstatus = 'BLACKLISTED'
+-                rv = (config['blacklist_rcode'], [], [], [])
++        elif wmatch is False:
++            returnstatus = 'WHITELISTED'
+ 
+-            elif wmatch is False:
+-                returnstatus = 'WHITELISTED'
++        elif config['blockip4'] and (qrdtype == 'A' or qname.endswith('.in-addr.arpa.')):
++            returnstatus = 'BLACKLISTED'
++            if config['log_hits']:
++                logging.warning('REQUEST-IPV4-HIT [{0}]: {1}'.format(qid, cachename))
++            rv = (config['blacklist_rcode'], [], [], [])
+ 
+-            elif config['blockip4'] and (qrdtype == 'A' or qname.endswith('.in-addr.arpa.')):
+-                returnstatus = 'BLACKLISTED'
+-                if config['log_hits']:
+-                    logging.warning('REQUEST-IPV4-HIT [{0}]: {1}'.format(qid, cachename))
+-                rv = (config['blacklist_rcode'], [], [], [])
+-
+-            elif config['blockip6'] and (qrdtype == 'AAAA' or qname.endswith('.ip6.arpa.')):
+-                returnstatus = 'BLACKLISTED'
+-                if config['log_hits']:
+-                     logging.warning('REQUEST-IPV6-HIT [{0}]: {1}'.format(qid, cachename))
++        elif config['blockip6'] and (qrdtype == 'AAAA' or qname.endswith('.ip6.arpa.')):
++            returnstatus = 'BLACKLISTED'
++            if config['log_hits']:
++                 logging.warning('REQUEST-IPV6-HIT [{0}]: {1}'.format(qid, cachename))
+ 
+-                #rv = (dns.rcode.NOERROR, [], [], []) # Workaround for searchdomains
+-                rv = (config['blacklist_rcode'], [], [], [])
++            #rv = (dns.rcode.NOERROR, [], [], []) # Workaround for searchdomains
++            rv = (config['blacklist_rcode'], [], [], [])
+ 
+-        ip6 =  False
+-        if cip.find(':') > 0:
+-            ip6 = True
++        ip6 = None
++        if is_ip.search(cip):
++            if cip.find(':') > 0:
++                ip6 = True
++            else:
++                ip6 = False
+ 
+-        if rv is None and (qrdtype in ('A', 'AAAA', 'CNAME')) and is_ip.search(cip) and ((ip6 is False and cip in private4) or (ip6 is True and cip in private6)):
++        if rv is None and (qrdtype in ('A', 'AAAA', 'CNAME')) and ((ip6 is False and cip in private4) or (ip6 is True and cip in private6)):
+             match = check_dom('NAME', qname, alias, 'ALIAS', False, False)
+             if match:
+                 spoof = alias[match]
+@@ -1597,7 +1559,7 @@ def dns_query(name, rdclass, rdtype, qid, cip, unfilter, fttl):
+ 
+                         if rv is not None:
+                             returnstatus = 'SPOOFED'
+-                            soa = dns.rrset.from_text(match, config['spoof_ttl'], 'IN', 6, "spoofed.{0} {1}.{2}. {3} 60 60 60 60".format(qname, qrdtype.lower(), spoof.rstrip('.').lower(), int(time.time())))
++                            soa = dns.rrset.from_text(match, config['spoof_ttl'], 'IN', 6, 'spoofed.{0} {1}.{2}. {3} 60 60 60 60'.format(qname, qrdtype.lower(), spoof.rstrip('.').lower(), int(time.time())))
+                             rv = (rv[0], rv[1], [soa], rv[3])
+ 
+                         else:
+@@ -1612,20 +1574,8 @@ def dns_query(name, rdclass, rdtype, qid, cip, unfilter, fttl):
+ 
+     addrs = False
+     if rv is None:
+-        fwdtag = 'GLOBAL'
+-
+-        ### !!! TODO: add PORT as option, default 53
+-        ### !!! TODO: Optimize return of below NXDOMAIN and REFUSED to skip forwardinf and cache
+-        #matchf = check_dom('NAME', qname, forwarder, 'FORWARDER', False, False)
++        fwdtag = None
+         if matchf:
+-            #chop = qname[:-len(match)]
+-            #logging.debug('CHOP: {0} - {1}'.format(qname, chop))
+-            #if is_blacklisted(chop, 'FORWARDER-CHOP-NAME', False):
+-            #    blacklistname = qname
+-            #    returnstatus = 'BLACKLISTED'
+-            #    rv = (config['blacklist_rcode'], [], [], [])
+-            #else:
+-
+             fwdtag = 'SELECTIVE'
+             addrs = roundrobin(forwarder[matchf].split(','), False)
+             if cip in addrs:
+@@ -1633,17 +1583,11 @@ def dns_query(name, rdclass, rdtype, qid, cip, unfilter, fttl):
+                 return (dns.rcode.SERVFAIL, [], [], [])
+             forwarder[matchf]= ','.join(addrs) # Preserve roundrobin order
+ 
+-        if rv is None and addrs is False:
+-            match = 'DEFAULT'
+-            if config['safe_nameservers'] and (returnstatus == 'WHITELISTED' or unfilter):
+-                addrs = roundrobin(config['safe_nameservers'], False)
+-                config['safe_nameservers'] = addrs # Preserve roundrobin order
+-            else:
+-                addrs = roundrobin(config['nameservers'], False)
+-                config['nameservers'] = addrs # Preserve roundrobin order
+-
++        else:
++            fwdtag = 'DEFAULT'
++            addrs = roundrobin(config['nameservers'], False)
++            config['nameservers'] = addrs # Preserve roundrobin order
+ 
+-    if rv is None and addrs:
+         result = False
+         response = None
+ 
+@@ -1656,7 +1600,7 @@ def dns_query(name, rdclass, rdtype, qid, cip, unfilter, fttl):
+             rv = (response.rcode(), response.answer, response.authority, response.additional)
+             rcode = str(dns.rcode.to_text(response.rcode()))
+ 
+-            if config['log_responses'] and is_ip.search(cip):
++            if is_ip.search(cip):
+                 log_helper(qname, rdtype, (rcode, response.answer, response.authority, response.additional), 'RESPONSE-FROM-SERVER', qid)
+ 
+             seen = set()
+@@ -1665,7 +1609,7 @@ def dns_query(name, rdclass, rdtype, qid, cip, unfilter, fttl):
+             if rcode == 'NOERROR':
+                 status = None
+ 
+-                if fwdtag in ('DEFAULT', 'GLOBAL') and config['filtering'] and config['filter_response'] and unfilter is False:
++                if fwdtag == 'DEFAULT' and config['filtering'] and config['filter_response'] and unfilter is False:
+                     response.answer = normttl(qname, response.answer, qid, fttl)
+                     #response.authority = normttl(qname, response.authority, qid, fttl)
+                     #response.additional = normttl(qname, response.additional, qid, fttl)
+@@ -1778,7 +1722,7 @@ def dns_query(name, rdclass, rdtype, qid, cip, unfilter, fttl):
+         num = countrr(rv[1])
+         rcode = rv[0]
+ 
+-        if config['log_responses'] and (not is_ip.search(cip)):
++        if not is_ip.search(cip):
+             log_helper(qname, qrdtype, rv, 'RESPONSE-FROM-{0}'.format(cip), qid)
+ 
+         if config['fix_noerror'] and rcode == dns.rcode.NOERROR and num < 1:
+@@ -1826,7 +1770,7 @@ def dns_query(name, rdclass, rdtype, qid, cip, unfilter, fttl):
+             if qname.strip('.') != blacklistname.strip('.'):
+                  tag = '{0}.cloaked'.format(tag)
+                  
+-            soa = dns.rrset.from_text(qname, ttl, 'IN', 6, "{0}.{1} {2}.{3}. {4} 60 60 60 60".format(tag, qname, qrdtype.lower(), blacklistname.strip('.'), int(time.time())))
++            soa = dns.rrset.from_text(qname, ttl, 'IN', 6, '{0}.{1} {2}.{3}. {4} 60 60 60 60'.format(tag, qname, qrdtype.lower(), blacklistname.strip('.'), int(time.time())))
+ 
+             newrv = False
+             if rdtype in (1, 5) and config['redirect_ip']: # A or CNAME
+@@ -1837,16 +1781,15 @@ def dns_query(name, rdclass, rdtype, qid, cip, unfilter, fttl):
+             elif rdtype in (5, 28) and config['redirect_ip']: # CNAME or AAAA
+                 ip6 = list(filter(is_ip6.search, config['redirect_ip']))
+                 if ip6:
+-                   newrv = (dns.rcode.NOERROR, [dns.rrset.from_text_list(qname, ttl, 'IN', 28, ip6)], [soa], [])
++                    newrv = (dns.rcode.NOERROR, [dns.rrset.from_text_list(qname, ttl, 'IN', 28, ip6)], [soa], [])
+ 
+             elif rdtype == 16: # TXT
+                 newrv = (dns.rcode.NOERROR, [dns.rrset.from_text(qname, ttl, 'IN', 16, 'Blacklisted!')], [soa], [])
+ 
+-            else:
+-                newrv = (config['blacklist_rcode'], [], [soa], [])
+-                
+             if newrv:
+                 rv = newrv
++            else:
++                rv = (config['blacklist_rcode'], [], [soa], [])
+ 
+         if ttl and ttl > 0:
+             # All TTLs the same
+@@ -1854,7 +1797,6 @@ def dns_query(name, rdclass, rdtype, qid, cip, unfilter, fttl):
+ 
+             # Cache it
+             if config['log_caching']:
+-                #logging.info('CACHED [{0}]: {1} = {2} - RR:{3} - TTL:{4} - {5}'.format(qid, cachename, dns.rcode.to_text(rcode), countrv(rv), ttl, returnstatus))
+                 log_helper(qname, rdtype, (rv[0], rv[1], rv[2], rv[3]), 'RESPONSE-TO-CACHE', qid)
+             cache.add(obj=CachedObject(name=cachename, obj=rv + (returnstatus,), ttl=ttl))
+ 
+@@ -1869,7 +1811,7 @@ def countrv(rv):
+         count = 0
+         for x in (1, 2, 3):
+             if rv[x]:
+-                count += len(rv[x])
++                count += countrr(rv[x])
+ 
+         return count
+ 
+@@ -1928,7 +1870,7 @@ def dox_request(qid, qname, rdtype, cachename, urls, rfc8484, cip):
+         message.use_edns(edns=0, ednsflags=0, payload=1220, request_payload=None, options=None)
+ 
+     af = None
+-    aftag = "Auto-IPv4/6"
++    aftag = 'Auto-IPv4/6'
+     if config['smartip']:
+         if is_ip.search(cip):
+             if rdtype == dns.rdatatype.A or is_ip4.search(cip) or ip4arpa.search(qname):
+@@ -1958,11 +1900,11 @@ def dox_request(qid, qname, rdtype, cachename, urls, rfc8484, cip):
+                         if cached:
+                             ips = list((map(lambda x: x[4][0], cached)))
+                             if (af == 2 and len(list(filter(is_ip4.search, ips))) < 1) or (af == 10 and len(list(filter(is_ip6.search, ips))) < 1):
+-                                aftag = "Auto-IPv4/6"
++                                aftag = 'Auto-IPv4/6'
+                                 af = None
+ 
+                         else:
+-                            aftag = "Auto-IPv4/6"
++                            aftag = 'Auto-IPv4/6'
+                             af = None
+ 
+                         #logging.info('DOH-QUERY [#{0}]: Query for {1}/IN/{2} to {3}@{4} ({5} - {6})'.format(retries, qname, dns.rdatatype.to_text(rdtype), url, port, aftag, ', '.join(ips)))
+@@ -2174,7 +2116,7 @@ def log_helper(qname, qrdtype, result, tag, qid):
+ 
+             return True
+ 
+-    logging.info('{0} [{1}]: {2}/IN/{3} = {4} ({5} RRs)'.format(tag, qid, qname, qrdtype, rcode, len(result[1])))
++    logging.info('{0} [{1}]: {2}/IN/{3} = {4} ({5} RRs)'.format(tag, qid, qname, qrdtype, rcode, countrv(result)))
+ 
+     return True
+ 
+@@ -2280,7 +2222,8 @@ def handle_query(raw_data, client_ip):
+                     if config['log_ecs'] and config['log_verbose']:
+                         logging.info('EDNS-CLIENT-SUBNET [{0}]: Client {1} -> {2}'.format(query.id, client_ip, ipaddr))
+                     client_ip = ipaddr
+-                    break
++
++                break
+ 
+ 
+     #logging.debug('GEO-IP: {0} - {1}'.format(client_ip, geo(client_ip)))
+@@ -2310,7 +2253,7 @@ def handle_query(raw_data, client_ip):
+     beingchecked.add(bname)
+ 
+     if config['log_requests']:
+-        logging.info('REQUEST [{0}]: {1} from {2} ({3} queries)'.format(query.id, queryname, cip, queryhits.get(queryname, 0)))
++        logging.info('REQUEST [{0}]: {1} from {2} ({3} queries)'.format(query.id, queryname, cip, queryhits.get(queryname, 1)))
+ 
+     servfail = False
+ 
+@@ -2332,7 +2275,6 @@ def handle_query(raw_data, client_ip):
+     else:
+         #logging.debug('REQUEST-FLAGS-FROM-CLIENT [{0}]: {1}'.format(query.id, dns.flags.to_text(query.flags)))
+ 
+-        # Make query
+         unfilter = False
+ 
+         if config['unfilter'] and (check_dom('NAME', name, forwarder, False, False, False) is False):
+@@ -2352,6 +2294,7 @@ def handle_query(raw_data, client_ip):
+                     logging.info('UNFILTER-NAME [{0}]: From {1} for {2} ({3})'.format(query.id, cip, queryname, match))
+ 
+ 
++        # Make query
+         result = dns_query(name, rdclass, rdtype, query.id, cip, unfilter, False)
+ 
+ 
+@@ -2634,7 +2577,6 @@ if __name__ == '__main__':
+ 
+     # Nameservers to forward to
+     config['nameservers'] = ['9.9.9.9', '149.112.112.112', '2620:fe::9', '2620:fe::fe:9']
+-    config['safe_nameservers'] = False
+ 
+     # Use DoH POST instead of GET (Recommended: POST)
+     config['doh_post'] = True
+@@ -2748,7 +2690,7 @@ if __name__ == '__main__':
+     config['use_regex'] = True
+     config['use_quick_regex'] = True
+ 
+-    # Smart domains (walk domains)
++    # Smart domains (walk domains to see if blacklisted domains are prepended)
+     config['smartdoms'] = True
+ 
+     # Fix NOERROR and zero answer answees to NXDOMAIN

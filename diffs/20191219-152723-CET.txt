@@ -1,0 +1,139 @@
+diff --git a/deugniets.py b/deugniets.py
+index d12f245..2217ffc 100644
+--- a/deugniets.py
++++ b/deugniets.py
+@@ -1,7 +1,7 @@
+ #!/usr/bin/env python3
+ '''
+ =======================================================================
+- deugniets.py v2.635-20191216 Copyright 2019 by cbuijs@chrisbuijs.com
++ deugniets.py v2.642-20191219 Copyright 2019 by cbuijs@chrisbuijs.com
+ =======================================================================
+ 
+  Based on: https://github.com/supriyo-biswas/adblock-dns-server
+@@ -22,6 +22,8 @@
+  - Filter out CNAME's with no resulting address(es)A
+  - Alias based on regex
+  - Ellaborate GEO to have combinations of City/Area/Country/Continent
++ - Listen on DoT (853) and DoH (443) - SSL/Certificate config
++ - Check/Investigate/Use Twisted names framework
+ 
+ =====================================================================
+ '''
+@@ -1043,24 +1045,25 @@ def check_geo(valuetype, testvalue, geolst, listname):
+         if giploc:
+             city, area, country, continent = tuple(giploc.split('/')[0:4])
+ 
+-            if city in geolst:
++            # !!! Make nicer/quicker
++            if continent in geolst:
+                 if config['log_hits'] and listname:
+-                    logging.warning('{0}-GEO-CITY-HIT [{1}]: {2} -> {3}'.format(valuetype, listname, testvalue, city))
++                    logging.warning('{0}-GEO-CONTINENT-HIT [{1}]: {2} -> {3}'.format(valuetype, listname, testvalue, continent))
+                 return True
+ 
+-            if area in geolst:
++            if country in geolst:
+                 if config['log_hits'] and listname:
+-                    logging.warning('{0}-GEO-AREA-HIT [{1}]: {2} -> {3}'.format(valuetype, listname, testvalue, area))
++                    logging.warning('{0}-GEO-COUNTRY-HIT [{1}]: {2} -> {3}'.format(valuetype, listname, testvalue, country))
+                 return True
+ 
+-            if country in geolst:
++            if area in geolst:
+                 if config['log_hits'] and listname:
+-                    logging.warning('{0}-GEO-COUNTRY-HIT [{1}]: {2} -> {3}'.format(valuetype, listname, testvalue, country))
++                    logging.warning('{0}-GEO-AREA-HIT [{1}]: {2} -> {3}'.format(valuetype, listname, testvalue, area))
+                 return True
+ 
+-            if continent in geolst:
++            if city in geolst:
+                 if config['log_hits'] and listname:
+-                    logging.warning('{0}-GEO-CONTINENT-HIT [{1}]: {2} -> {3}'.format(valuetype, listname, testvalue, continent))
++                    logging.warning('{0}-GEO-CITY-HIT [{1}]: {2} -> {3}'.format(valuetype, listname, testvalue, city))
+                 return True
+ 
+     return False
+@@ -1660,7 +1663,7 @@ def dns_query(name, rdclass, rdtype, qid, cip, unfilter, fttl):
+                                             status = True
+                                             blacklistname = target
+                                             break
+-                                        elif is_ip.search(target) and (target in config['redirect_ip']):
++                                        elif is_ip.search(target) and (config['redirect_ip'] and target in config['redirect_ip']):
+                                             logging.warning('REDIRECT-IP-HIT: {0} -> {1}'.format(rrname, target))
+                                             returnstatus = 'WHITELISTED'
+                                             break
+@@ -1781,11 +1784,11 @@ def dns_query(name, rdclass, rdtype, qid, cip, unfilter, fttl):
+                 soa = dns.rrset.from_text(qname, ttl, 'IN', 6, "blocked.{0} {1}.{2}. 1 60 60 60 60".format(qname, qrdtype.lower(), blacklistname.strip('.')))
+                 newrv = False
+ 
+-                if rcode == 0 and rdtype == 1:
++                if rcode == 0 and rdtype == 1 and config['redirect_ip']:
+                     ip4 = list(filter(is_ip4.search, config['redirect_ip']))
+                     if ip4:
+                         newrv = (dns.rcode.NOERROR, [dns.rrset.from_text_list(qname, ttl, 'IN', 1, ip4)], [soa], [])
+-                elif rcode == 0 and rdtype == 28:
++                elif rcode == 0 and rdtype == 28 and config['redirect_ip']:
+                     ip6 = list(filter(is_ip6.search, config['redirect_ip']))
+                     if ip6:
+                     	newrv = (dns.rcode.NOERROR, [dns.rrset.from_text_list(qname, ttl, 'IN', 28, ip6)], [soa], [])
+@@ -2081,6 +2084,7 @@ def geo(client_ip):
+ 
+     ip6 = False
+     response = '-/-/-/-'
++
+     if config['geodb'] and is_ip.search(cip):
+         if cip.find(':') > 0:
+             ip6 = True
+@@ -2099,6 +2103,9 @@ def geo(client_ip):
+             except:
+                 pass
+ 
++    if response == '-/-/-/-':
++        response = '-/-/-/UNKNOWN'
++
+     geo_cache.add(obj=CachedObject(name=cip, obj=response, ttl=43200)) # 12 hours
+     return response
+ 
+@@ -2123,7 +2130,7 @@ def handle_query(raw_data, client_ip):
+                     break
+ 
+ 
+-    logging.info('GEO-IP: {0} - {1}'.format(client_ip, geo(client_ip))) #!!! Debug?
++    #logging.debug('GEO-IP: {0} - {1}'.format(client_ip, geo(client_ip)))
+ 
+     name = str(query.question[0].name).lower()
+ 
+@@ -2426,6 +2433,7 @@ if __name__ == '__main__':
+     # Lists
+     config['whitelist'] = ['white.list']
+     config['blacklist'] = ['black.list']
++    config['private_addrs'] = []
+     config['optimize'] = True
+ 
+     # Logging
+@@ -2564,15 +2572,23 @@ if __name__ == '__main__':
+         private4['172.16.0.0/12'] = 'Private'
+         private4['192.168.0.0/16'] = 'Private'
+ 
+-        # Whitelist Local/Private IPv4's
++        # Whitelist Local/Private IPv6's
+         private6['::1/128'] = 'Private'
+         private6['fc00::/7'] = 'Private'
+         private6['fe80::/10'] = 'Private'
+ 
++        for addr in config['private_addrs']:
++            if addr.find(':') > 0:
++                private6[addr] = 'Private'
++            else:
++                private4[addr] = 'Private'
++
+         for ip in private4:
++            logging.info('PRIVATE-IPV4: {0}'.format(ip)) # Debug
+             wl_ip4[ip] = private4[ip]
+ 
+         for ip in private6:
++            logging.info('PRIVATE-IPV6: {0}'.format(ip)) # Debug
+             wl_ip6[ip] = private6[ip]
+ 
+         if config['optimize']:

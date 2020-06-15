@@ -1,0 +1,282 @@
+diff --git a/deugniets.py b/deugniets.py
+index eeaea1d..44d16b7 100644
+--- a/deugniets.py
++++ b/deugniets.py
+@@ -1,7 +1,7 @@
+ #!/usr/bin/env python3
+ '''
+ ===========================================================================
+- deugniets.py v2.777-20200401 Copyright 2019-2020 by cbuijs@chrisbuijs.com
++ deugniets.py v2.783-20200403 Copyright 2019-2020 by cbuijs@chrisbuijs.com
+ ===========================================================================
+ 
+  Based on: https://github.com/supriyo-biswas/adblock-dns-server
+@@ -38,6 +38,7 @@ Done:
+  - Better timeout handling
+  - Better logging
+  - Optimize filtering
++ - Fixed querystats
+ 
+ ===========================================================================
+ '''
+@@ -79,7 +80,7 @@ import dns.exception
+ import dns.rdataclass
+ #import dns.renderer
+ 
+-# Process EDNS Clienti SubNet Option
++# Process EDNS Client SubNet Option
+ import clientsubnetoption
+ 
+ # Regex
+@@ -1405,10 +1406,11 @@ def dns_query(name, rdclass, rdtype, qid, cip, unfilter, fttl):
+ 
+             elif (command in ('HITS', 'STATS')) and (subcommand in ('BLACKLISTED', 'NONE', 'OK', 'WHITELISTED')):
+                 count = 0
+-                for entry in sorted(queryhits, key=queryhits.get, reverse=True):
++                for entry in sorted(queryhits, key=queryhits.get, reverse=True)[:50]: # Top-50
+                     testvalue = entry.split('/')[0]
+-                    if testvalue and testvalue.endswith('.command.') is False and entry in cache:
++                    if testvalue and entry in cache:
+                         blockedinfo = cache.get(entry)[4]
++
+                         if subcommand != 'NONE':
+                             if subcommand.lower() == blockedinfo.lower():
+                                 count += 1
+@@ -1416,6 +1418,9 @@ def dns_query(name, rdclass, rdtype, qid, cip, unfilter, fttl):
+                         else:
+                             count += 1
+                             logging.info('STATS-#{0}: {1} had {2} queries ({3})'.format(count, entry, queryhits.get(entry, 0), blockedinfo))
++                    #else: # Reset counter?
++                    #    queryhits[entry] = 0
++                        
+ 
+             else:
+                 logging.error('COMMAND-UNKNOWN: {0}'.format(command))
+@@ -1426,9 +1431,18 @@ def dns_query(name, rdclass, rdtype, qid, cip, unfilter, fttl):
+             return (dns.rcode.REFUSED, [], [], [])
+ 
+         logging.info('COMMAND-FINISHED: {0}'.format(command))
+-        return (dns.rcode.NOERROR, [], [], [])
++        soa = dns.rrset.from_text(qname, 0, 'IN', 6, "finished.command. {0}. {1} 60 60 60 60".format(command.lower(), int(time.time())))
++        return (dns.rcode.NOERROR, [], [soa], [])
+  
+-    # get from cache
++
++    # Querystats
++    if cachename in queryhits:
++        queryhits[cachename] += 1
++    else:
++        queryhits[cachename] = 1
++
++
++    # Get from cache
+     parentcount = -1
+     lcachename = cachename.split('/')[0]
+     rcachename = '/'.join(cachename.split('/')[1:])
+@@ -1439,9 +1453,6 @@ def dns_query(name, rdclass, rdtype, qid, cip, unfilter, fttl):
+         parentcachename = '.'.join(lcachename.split('.')[parentcount:])
+         gcachename = '{0}/{1}'.format(parentcachename, rcachename)
+ 
+-        #if config['log_caching']:
+-        #    logging.info('CACHE-CHECK [{0}]: {1} <- {2}'.format(qid, cachename, gcachename))
+-
+         result = cache.get(gcachename)
+         if result is not None:
+             obj = cache.info(name=gcachename)
+@@ -1485,11 +1496,9 @@ def dns_query(name, rdclass, rdtype, qid, cip, unfilter, fttl):
+ 
+         wmatch = is_blacklisted(qname, 'NAME', False) # Due first, faster due to caching of previous results
+ 
+-        if config['block_specific'] and (wmatch is not True) and (qname in bl_dom):
+-            logging.warning('SPECIFIC-DOM-HIT [BLACKLIST]: \"{0}\" -> \"{0}\"'.format(qname))
+-            blacklistname = qname
+-            returnstatus = 'BLACKLISTED'
+-            rv = (config['blacklist_rcode'], [], [], [])
++        if config['block_specific'] and (wmatch is False) and (qname in bl_dom):
++            logging.warning('SPECIFIC-NAME-DOM-HIT [BLACKLIST]: \"{0}\" -> \"{0}\"'.format(qname))
++            wmatch = True
+ 
+         if rv is None:
+             if wmatch is True:
+@@ -1894,23 +1903,23 @@ def dox_request(qid, qname, rdtype, cachename, urls, rfc8484, cip):
+ 
+     if config['use_ecs_ip'] and cip and is_ip.search(cip):
+         ccip = cip
++        bits = 0
+         if cip.find(':') > 0:
+             if config['override_ecs_ip6'] and is_ip6.search(config['override_ecs_ip6']):
+                 ccip = config['override_ecs_ip6']
+-
+             bits = config['ecs_privacy6'] or 64
++
+         else:
+             if config['override_ecs_ip4'] and is_ip4.search(config['override_ecs_ip4']):
+                 ccip = config['override_ecs_ip4']
+-
+             bits = config['ecs_privacy4'] or 24
+ 
+-        if ccip != cip:
+-            logging.info('EDNS-CLIENT-IP-OVERRIDE: {0} -> {1}'.format(cip, ccip))
++        if config['log_ecs'] and ccip != cip:
++            logging.info('EDNS-CLIENT-SUBNET-OVERRIDE: {0} -> {1}'.format(cip, ccip))
+ 
+-        ocip = IP(ccip).make_net(str(bits)).strNormal(0)
++        ocip = IP(ccip).make_net(str(bits)).strNormal(0) # Convert to network with no mask
+ 
+-        if bits not in (32, 128):
++        if config['log_ecs'] and bits not in (32, 128):
+             logging.info('EDNS-CLIENT-SUBNET-PRIVACY: {0} -> {1}/{2}'.format(ccip, ocip, bits))
+ 
+         cso = clientsubnetoption.ClientSubnetOption(ocip, bits)
+@@ -2145,56 +2154,61 @@ def normttl(qname, answer, qid, newttl):
+ 
+ 
+ def log_helper(qname, qrdtype, result, tag, qid):
+-    log_response(qname, qrdtype, result[1], result[0], '{0}-ANSWER'.format(tag), False, qid)
+-    if config['log_verbose']:
+-        if result[2]:
+-            log_response(qname, qrdtype, result[2], result[0], '{0}-AUTHORITY'.format(tag), False, qid)
+-        if result[3]:
+-            log_response(qname, qrdtype, result[3], result[0], '{0}-ADDITIONAL'.format(tag), False, qid)
++    if isinstance(qrdtype, int):
++        qrdtype = dns.rdatatype.to_text(qrdtype)
++
++    rcode = result[0]
++    if isinstance(rcode, int):
++        rcode = dns.rcode.to_text(rcode)
++
++    if config['log_responses']:
++        if result[1]:
++            log_response(qname, qrdtype, result[1], rcode, '{0}-ANSWER'.format(tag), False, qid)
++
++            if config['log_verbose']:
++                if result[2]:
++                    log_response(qname, qrdtype, result[2], rcode, '{0}-AUTHORITY'.format(tag), False, qid)
++
++                if result[3]:
++                    log_response(qname, qrdtype, result[3], rcode, '{0}-ADDITIONAL'.format(tag), False, qid)
++
++            return True
++
++    logging.info('{0} [{1}]: {2}/IN/{3} = {4} ({5} RRs)'.format(tag, qid, qname, qrdtype, rcode, len(result[1])))
+ 
+     return True
+ 
+ 
+ def log_response(qname, qtype, answer, rcode, tag, spoofedname, qid):
+-    #logging.debug('DEBUG-{0}: {1}'.format(tag, answer))
+-    if config['log_responses']:
+-        if isinstance(qtype, int):
+-            qtype = dns.rdatatype.to_text(qtype)
+-
+-        if isinstance(rcode, int):
+-            rcode = dns.rcode.to_text(rcode)
+-
+-        if rcode == 'NOERROR' and len(answer) == 0:
+-            rcode = 'NODATA'
+-
+-        elif rcode in ('NOERROR', 'NXDOMAIN', 'REFUSED'):
+-            count = 0
+-            rrsetcounttotal = len(answer)
+-            rrsetcount = 0
+-            if answer:
+-                for rrset in answer:
+-                    rrsetcount += 1
+-                    rdtype = dns.rdatatype.to_text(rrset.rdtype)
+-                    rrcounttotal = len(rrset)
+-                    rrcount = 0
+-                    for rr in rrset:
+-                        count +=1
+-                        rrcount += 1
+-                        if config['log_verbose']:
+-                            if spoofedname:
+-                                logging.info('{0} [{1}:{2}/{3}-{4}/{5}#{6}]: {7} -> {8} {9} IN {10} {11}'.format(tag, qid, rrsetcount, rrsetcounttotal, rrcount, rrcounttotal, count, rrset.name, spoofedname, rrset.ttl, rdtype, rr))
++    if rcode == 'NOERROR' and len(answer) == 0:
++        rcode = 'NODATA'
++
++    elif rcode in ('NOERROR', 'NXDOMAIN', 'REFUSED'):
++        count = 0
++        rrsetcounttotal = len(answer)
++        rrsetcount = 0
++        if answer:
++            for rrset in answer:
++                rrsetcount += 1
++                rdtype = dns.rdatatype.to_text(rrset.rdtype)
++                rrcounttotal = len(rrset)
++                rrcount = 0
++                for rr in rrset:
++                    count +=1
++                    rrcount += 1
++                    if config['log_verbose']:
++                        if spoofedname:
++                            logging.info('{0} [{1}:{2}/{3}-{4}/{5}#{6}]: {7} -> {8} {9} IN {10} {11}'.format(tag, qid, rrsetcount, rrsetcounttotal, rrcount, rrcounttotal, count, rrset.name, spoofedname, rrset.ttl, rdtype, rr))
++                        else:
++                            if rdtype == 'CNAME' and config['collapse']:
++                                logging.info('{0} [{1}:{2}/{3}-{4}/{5}#{6}]: {7} {8} IN {9} {10} (COLLAPSE-CANDIDATE)'.format(tag, qid, rrsetcount, rrsetcounttotal, rrcount, rrcounttotal, count, rrset.name, rrset.ttl, rdtype, rr))
+                             else:
+-                                if rdtype == 'CNAME' and config['collapse']:
+-                                    logging.info('{0} [{1}:{2}/{3}-{4}/{5}#{6}]: {7} {8} IN {9} {10} (COLLAPSE-CANDIDATE)'.format(tag, qid, rrsetcount, rrsetcounttotal, rrcount, rrcounttotal, count, rrset.name, rrset.ttl, rdtype, rr))
++                                if rdtype in ('A', 'AAAA'):
++                                    logging.info('{0} [{1}:{2}/{3}-{4}/{5}#{6}]: {7} {8} IN {9} {10} ({11})'.format(tag, qid, rrsetcount, rrsetcounttotal, rrcount, rrcounttotal, count, rrset.name, rrset.ttl, rdtype, expand_ip(rr), geo(rr)))
+                                 else:
+-                                    if rdtype in ('A', 'AAAA'):
+-                                        logging.info('{0} [{1}:{2}/{3}-{4}/{5}#{6}]: {7} {8} IN {9} {10} ({11})'.format(tag, qid, rrsetcount, rrsetcounttotal, rrcount, rrcounttotal, count, rrset.name, rrset.ttl, rdtype, expand_ip(rr), geo(rr)))
+-                                    else:
+-                                        logging.info('{0} [{1}:{2}/{3}-{4}/{5}#{6}]: {7} {8} IN {9} {10}'.format(tag, qid, rrsetcount, rrsetcounttotal, rrcount, rrcounttotal, count, rrset.name, rrset.ttl, rdtype, rr))
+-
+-                return
++                                    logging.info('{0} [{1}:{2}/{3}-{4}/{5}#{6}]: {7} {8} IN {9} {10}'.format(tag, qid, rrsetcount, rrsetcounttotal, rrcount, rrcounttotal, count, rrset.name, rrset.ttl, rdtype, rr))
+ 
+-        logging.info('{0} [{1}]: {2}/IN/{3} = {4}'.format(tag, qid, qname, qtype, rcode))
++            return
+ 
+     return
+ 
+@@ -2258,12 +2272,14 @@ def handle_query(raw_data, client_ip):
+     if config['use_ecs_ip'] and hasattr(query, 'options'):
+         for opt in query.options:
+             if hasattr(opt, 'ip') and hasattr(opt, 'mask'):
+-                if config['log_requests']:
+-                    ipmask = IP('{0}/{1}'.format(opt.ip, opt.mask)).strNormal(1)
+-                    logging.info('EDNS-CLIENT-SUBNET [{0}]: Client {1} provides {2} ({3})'.format(query.id, client_ip, ipmask, geo(ipmask)))
++                ipaddr = IP(opt.ip).strNormal(0)
++                if config['log_ecs'] and config['log_verbose']:
++                    logging.info('EDNS-CLIENT-SUBNET [{0}]: Client {1} provides subnet {2}/{3}'.format(query.id, client_ip, ipaddr, opt.mask))
+ 
+                 if opt.mask in (None, 0, 32, 128):
+-                    client_ip = IP('{0}/{1}'.format(opt.ip, opt.mask)).strNormal(0)
++                    if config['log_ecs'] and config['log_verbose']:
++                        logging.info('EDNS-CLIENT-SUBNET [{0}]: Client {1} -> {2}'.format(query.id, client_ip, ipaddr))
++                    client_ip = ipaddr
+                     break
+ 
+ 
+@@ -2280,11 +2296,6 @@ def handle_query(raw_data, client_ip):
+     bname = '{0}/{1}/*'.format(name, rdclasst)
+ 
+ 
+-    if queryname in queryhits:
+-        queryhits[queryname] += 1
+-    else:
+-        queryhits[queryname] = 1
+-
+     count = 0
+     while count < config['retry_count'] and bname in beingchecked:
+         count += 1
+@@ -2349,7 +2360,7 @@ def handle_query(raw_data, client_ip):
+             if result[1]:
+                 result = (result[0], result[1], [], [])
+             else:
+-                result = (dns.rcode.NXDOMAIN, [], result[2], [])
++                result = (result[0], [], result[2], [])
+         else:
+             result = (result[0], [], result[2], [])
+ 
+@@ -2696,6 +2707,7 @@ if __name__ == '__main__':
+     config['log_forwards'] = True
+     config['log_collapse'] = True
+     config['log_verbose'] = False
++    config['log_ecs'] = False
+ 
+     # Return codes
+     config['blacklist_rcode'] = 'REFUSED'

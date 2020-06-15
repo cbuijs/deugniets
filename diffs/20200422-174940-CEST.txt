@@ -1,0 +1,97 @@
+diff --git a/deugniets.py b/deugniets.py
+index a831966..ddacf14 100644
+--- a/deugniets.py
++++ b/deugniets.py
+@@ -20,13 +20,10 @@
+      - Might be fixed already, check/validate/test
+    - Add multiple addresses/ports liste_on feature
+  - Ability to disable resolution of aliases/spoofs
+- - Filter out CNAME's with no resulting address(es)
+-   - Already for "collapse" done, check/validate/test for non-collapsed answers
+-     - Make NXDOMAIN of it
+-   - Test-Case: dig www.paypal.com aaaa
+  - Alias based on regex
+  - Listen on DoT (853) and DoH (443) - SSL/Certificate config
+  - Pre-calculate ecs-prefix privacy instead everytime
++   - Meh.
+ 
+ Half-Done:
+  - Bootstrap servers for getaddrinfo
+@@ -2316,77 +2313,6 @@ def log_response(tag, qid, answer):
+ 
+             logging.info('{0} [{1}] RRSET {2} of {3}: {4} {5} IN {6} {7}'.format(tag, qid, count, total, rrname, ttl, rrtype, ', '.join(rrdata)))
+ 
+-    return True
+-
+-
+-def old_log_helper(qname, qrdtype, result, tag, qid):
+-    if isinstance(qrdtype, int):
+-        qrdtype = dns.rdatatype.to_text(qrdtype)
+-
+-    rcode = result[0]
+-    if isinstance(rcode, int):
+-        rcode = dns.rcode.to_text(rcode)
+-
+-    if config['log_responses']:
+-        if result[1]:
+-            log_response(qname, qrdtype, result[1], rcode, '{0}-ANSWER'.format(tag), False, qid)
+-
+-            if config['log_verbose']:
+-                if result[2]:
+-                    log_response(qname, qrdtype, result[2], rcode, '{0}-AUTHORITY'.format(tag), False, qid)
+-
+-                if result[3]:
+-                    log_response(qname, qrdtype, result[3], rcode, '{0}-ADDITIONAL'.format(tag), False, qid)
+-
+-    status = 'NORMAL'
+-    if len(result) > 4:
+-        status = result[4]
+-
+-    ttl = 0
+-    if result[1]:
+-        ttl = result[1][-1].ttl
+-    elif result[2]:
+-        ttl = result[2][-1].ttl
+-    elif result[3]:
+-        ttl = result[3][-1].ttl
+-
+-    logging.info('{0} [{1}]: {2}/IN/{3} = {4} - {5} RRs - TTL:{6} - {7}'.format(tag, qid, qname, qrdtype, rcode, countrv(result), ttl, status))
+-
+-    return True
+-
+-
+-def old_log_response(qname, qtype, answer, rcode, tag, spoofedname, qid):
+-    if rcode == 'NOERROR' and len(answer) == 0:
+-        rcode = 'NODATA'
+-
+-    elif rcode in ('NOERROR', 'NXDOMAIN', 'REFUSED'):
+-        count = 0
+-        rrsetcounttotal = len(answer)
+-        rrsetcount = 0
+-
+-        if answer:
+-            for rrset in answer:
+-                rrsetcount += 1
+-                rdtype = dns.rdatatype.to_text(rrset.rdtype)
+-                rrcounttotal = len(rrset)
+-                rrcount = 0
+-                for rr in rrset:
+-                    count +=1
+-                    rrcount += 1
+-                    if config['log_verbose']:
+-                        if spoofedname:
+-                            logging.info('{0} [{1}:{2}/{3}-{4}/{5}#{6}]: {7} -> {8} {9} IN {10} {11}'.format(tag, qid, rrsetcount, rrsetcounttotal, rrcount, rrcounttotal, count, rrset.name, spoofedname, rrset.ttl, rdtype, rr))
+-                        else:
+-                            if rdtype == 'CNAME' and config['collapse']:
+-                                logging.info('{0} [{1}:{2}/{3}-{4}/{5}#{6}]: {7} {8} IN {9} {10} (COLLAPSE-CANDIDATE)'.format(tag, qid, rrsetcount, rrsetcounttotal, rrcount, rrcounttotal, count, rrset.name, rrset.ttl, rdtype, rr))
+-                            else:
+-                                if rdtype in ('A', 'AAAA'):
+-                                    logging.info('{0} [{1}:{2}/{3}-{4}/{5}#{6}]: {7} {8} IN {9} {10} ({11})'.format(tag, qid, rrsetcount, rrsetcounttotal, rrcount, rrcounttotal, count, rrset.name, rrset.ttl, rdtype, compress_ip(rr), geo(rr)))
+-                                else:
+-                                    logging.info('{0} [{1}:{2}/{3}-{4}/{5}#{6}]: {7} {8} IN {9} {10}'.format(tag, qid, rrsetcount, rrsetcounttotal, rrcount, rrcounttotal, count, rrset.name, rrset.ttl, rdtype, rr))
+-
+-            return
+-
+     return
+ 
+ 

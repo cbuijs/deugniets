@@ -1,0 +1,105 @@
+diff --git a/deugniets.py b/deugniets.py
+index 50b4482..45dff3f 100644
+--- a/deugniets.py
++++ b/deugniets.py
+@@ -1,7 +1,7 @@
+ #!/usr/bin/env python3
+ '''
+ ===========================================================================
+- deugniets.py v2.742-20200301 Copyright 2019-2020 by cbuijs@chrisbuijs.com
++ deugniets.py v2.744-20200302 Copyright 2019-2020 by cbuijs@chrisbuijs.com
+ ===========================================================================
+ 
+  Based on: https://github.com/supriyo-biswas/adblock-dns-server
+@@ -1385,25 +1385,19 @@ def dns_query(name, rdclass, rdtype, qid, cip, unfilter, fttl):
+             elif command == 'FLUSH':
+                 clear_caches()
+ 
+-            #elif (command in ('HITS', 'STATS')) and (subcommand in ('BLACKLISTED', 'NONE', 'OK', 'WHITELISTED')):
+-            #    count = 0
+-            #    for entry in sorted(queryhits, key=queryhits.get, reverse=True):
+-            #        testvalue = entry.split('/')[0]
+-            #        if testvalue and testvalue.endswith('.command.') is False and testvalue in listed_cache:
+-            #            blocked = listed_cache.get(testvalue)
+-            #            blockedinfo = "OK"
+-            #            if blocked is True:
+-            #                blockedinfo = "BLACKLISTED"
+-            #            elif blocked is False:
+-            #                blockedinfo = "WHITELISTED"
+-
+-            #            if subcommand != 'NONE':
+-            #                if subcommand.lower() == blockedinfo.lower():
+-            #                    count += 1
+-            #                    logging.info('STATS-#{0}: {1} had {2} queries ({3})'.format(count, entry, queryhits.get(entry, 0), blockedinfo))
+-            #            else:
+-            #                count += 1
+-            #                logging.info('STATS-#{0}: {1} had {2} queries ({3})'.format(count, entry, queryhits.get(entry, 0), blockedinfo))
++            elif (command in ('HITS', 'STATS')) and (subcommand in ('BLACKLISTED', 'NONE', 'OK', 'WHITELISTED')):
++                count = 0
++                for entry in sorted(queryhits, key=queryhits.get, reverse=True):
++                    testvalue = entry.split('/')[0]
++                    if testvalue and testvalue.endswith('.command.') is False and entry in cache:
++                        blockedinfo = cache.get(entry)[4]
++                        if subcommand != 'NONE':
++                            if subcommand.lower() == blockedinfo.lower():
++                                count += 1
++                                logging.info('STATS-#{0}: {1} had {2} queries ({3})'.format(count, entry, queryhits.get(entry, 0), blockedinfo))
++                        else:
++                            count += 1
++                            logging.info('STATS-#{0}: {1} had {2} queries ({3})'.format(count, entry, queryhits.get(entry, 0), blockedinfo))
+ 
+             else:
+                 logging.error('COMMAND-UNKNOWN: {0}'.format(command))
+@@ -1894,6 +1888,13 @@ def dox_request(qid, qname, rdtype, cachename, urls, rfc8484, cip):
+     else:
+         message.use_edns(edns=0, ednsflags=0, payload=1220, request_payload=None, options=None)
+ 
++    #af = None
++    #if config['smartip']:
++    #    if cip.find(':') > 0:
++    #        af = 10 # IPv6
++    #    else:
++    #        af = 2 # IPv4
++
+     retries = 0
+     while retries < 3:
+         for url in filter(None, urls):
+@@ -1911,7 +1912,7 @@ def dox_request(qid, qname, rdtype, cachename, urls, rfc8484, cip):
+ 
+                     response = False
+                     try:
+-                        response = dns.query.https(message, url)
++                        response = dns.query.https(message, url) #, af=af)
+ 
+                     except BaseException as err:
+                         logging.error('DOH-ERROR: Query for {0}/IN/{1} to {2} - {3}'.format(qname, dns.rdatatype.to_text(rdtype), url, err))
+@@ -1991,7 +1992,7 @@ def dox_request(qid, qname, rdtype, cachename, urls, rfc8484, cip):
+ 
+                            response = False
+                            try:
+-                               response = dns.query.tls(message, addr, timeout=5, port=853, server_hostname=servername)
++                               response = dns.query.tls(message, addr, timeout=5, port=853, server_hostname=servername) #, af=af)
+ 
+                            except BaseException as err:
+                                logging.error('DOT-QUERY-ERROR: Query for {0}/IN/{1} to {2} - {3}'.format(qname, dns.rdatatype.to_text(rdtype), url, err))
+@@ -2073,9 +2074,8 @@ def normttl(qname, answer, qid, newttl):
+     elif answer:
+         #ttl = answer[-1].ttl
+         lttl = list()
+-        for x in answer:
+-            #lttl.append(max(config['min_ttl'], x.ttl))
+-            lttl.append(max(0, x.ttl))
++        for rrset in answer:
++            lttl.append(max(1, rrset.ttl))
+ 
+         ttl = int(round(sum(lttl) / len(lttl)))
+ 
+@@ -2496,7 +2496,7 @@ def run_server():
+         for dnsserver in config['nameservers']:
+             if dnsserver.startswith('tls://') and dnsserver.find('#') == -1:
+                 hostname = dnsserver.split('/')[2]
+-                ips = list((map(lambda x: x[4][0], socket.getaddrinfo('{0}.'.format(hostname.rstrip('.')), 853, typ=socket.SOCK_STREAM))))
++                ips = list(map(lambda x: x[4][0], socket.getaddrinfo('{0}.'.format(hostname.rstrip('.')), 853, type=socket.SOCK_STREAM)))
+                 logging.info('TLS-SERVER: {0} ({1})'.format(hostname, ', '.join(ips)))
+                 for ip in ips:
+                     newentry = 'tls://{0}#{1}'.format(hostname, ip)

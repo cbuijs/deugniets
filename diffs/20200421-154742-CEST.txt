@@ -1,0 +1,692 @@
+diff --git a/deugniets.py b/deugniets.py
+index 68777e2..cd654f9 100644
+--- a/deugniets.py
++++ b/deugniets.py
+@@ -1,7 +1,7 @@
+ #!/usr/bin/env python3
+ '''
+ ===========================================================================
+- deugniets.py v2.821-20200415 Copyright 2019-2020 by cbuijs@chrisbuijs.com
++ deugniets.py v2.835-20200421 Copyright 2019-2020 by cbuijs@chrisbuijs.com
+ ===========================================================================
+ 
+  Based on: https://github.com/supriyo-biswas/adblock-dns-server
+@@ -14,30 +14,45 @@
+            https://www.maxmind.com
+ 
+  ToDo:
+-
+- - Fix listening/response IP when responding (same IP out as in), IPv6
+- - Fix TCP listeners
+- - Add multiple addresses/ports liste_on feature
++ - Refurbish whole stack of listeners, multi-threading etc
++   - Fix listening/response IP when responding (same IP out as in), IPv6
++   - Fix TCP listeners
++     - Might be fixed already, check/validate/test
++   - Add multiple addresses/ports liste_on feature
+  - Ability to disable resolution of aliases/spoofs
+- - Filter out CNAME's with no resulting address(es)A
++ - Filter out CNAME's with no resulting address(es)
++   - Already for "collapse" done, check/validate/test for non-collapsed answers
++     - Make NXDOMAIN of it
++   - Test-Case: dig www.paypal.com aaaa
+  - Alias based on regex
+- - Ellaborate GeoIP to have combinations of City/Area/Country/Continent
+  - Listen on DoT (853) and DoH (443) - SSL/Certificate config
++ - Fix round-robin
++ - Pre-calculate ecs-prefix privacy instead everytime
++
++Half-Done:
++ - Ellaborate GeoIP to have combinations of City/Area/Country/Continent
++   - Done CONTINENT:/COUNTRY:/AREA:/CITY:
+  - Bootstrap servers for getaddrinfo
+- - Check/Investigate/Use Twisted names framework - Backburner
+- - Unduplicate check_dom matches - Added cache
++   - Check/Validate/Test
+ 
+ Done:
+-
+  - NextDNS supported out of the box
+  - GeoIP
+  - listed_cache redundant due to caching
+  - nameservers now accept port-numbers (@<num> format)
+- - Rewirte smartip code
++ - Rewrite smartip code
+  - Better timeout handling
+  - Better logging
+  - Optimize filtering
+  - Fixed querystats
++ - Unduplicate check_dom matches - Added cache
++ - More robust CNAME-Collapser
++ - Fixed CNAME without A/AAAA -> NXDOMAIN
++ - Fixed NODATA processing
++ - Reworked TTL logic/updates
++
++Do Not:
++ - Check/Investigate/Use Twisted names framework - Backburner
+ 
+ ===========================================================================
+ '''
+@@ -207,7 +222,7 @@ is_dox4 = regex.compile('^(dn|http|tl)s://(do[ht]|ip(v)*)4\..*$', regex.I)
+ is_dox6 = regex.compile('^(dn|http|tl)s://(do[ht]|ip(v)*)6\..*$', regex.I)
+ 
+ # GEO
+-is_geo = regex.compile('^@[a-z/\s]+$', regex.I)
++is_geo = regex.compile('^@[a-z/\:\s]+$', regex.I)
+ 
+ # Regex
+ is_regex = regex.compile('^/.*/$', regex.I)
+@@ -485,8 +500,18 @@ def read_list(filenames, listname, domlst, ip4lst, ip6lst, rxlst, unlst, unip4,
+             if ftype is False or ftype == 'GEO':
+                 logging.info('PROCESS-LIST ({0}): Getting GEOs...'.format(lname))
+                 for entry in list(filter(None, filter(is_geo.search, cleanlines))):
+-                    #entry = entry.lstrip('@')
+-                    geolst[regex.sub('[^a-zA-Z0-9]+', '', entry.upper())] = entry
++                    entry = entry.lstrip('@')
++                    loc = False
++                    if entry.find(':') > 0:
++                        loc, entry = entry.split(':')[0:2]
++                        if loc not in ('CONTINENT', 'COUNTRY', 'AREA', 'CITY'):
++                            logging.error('PROCESS-LIST ({0}): Invalid GEO type {1} ({1}:{2})'.format(lname, loc, entry))
++                            loc = False
++
++                    if loc:
++                        geolst['{0}:{1}'.format(loc, regex.sub('[^a-zA-Z0-9]+', '', entry.upper()))] = entry
++                    else:
++                        geolst[regex.sub('[^a-zA-Z0-9]+', '', entry.upper())] = entry
+ 
+             if ftype is False or ftype == 'ALIAS':
+                 logging.info('PROCESS-LIST ({0}): Getting ALIASes...'.format(lname))
+@@ -1126,24 +1151,24 @@ def check_geo(valuetype, testvalue, geolst, listname):
+             city, area, country, continent = tuple(giploc.split('/')[0:4])
+ 
+             # !!! Make nicer/quicker
+-            if continent in geolst:
++            if continent in geolst or 'CONTINENT:{0}'.format(continent) in geolst:
+                 if config['log_hits'] and config['log_verbose'] and listname:
+-                    logging.warning('{0}-GEO-CONTINENT-HIT [{1}]: {2} -> {3}'.format(valuetype, listname, testvalue, continent))
++                    logging.warning('{0}-GEO-CONTINENT-HIT [{1}]: {2} -> {3} ({4})'.format(valuetype, listname, testvalue, continent, giploc))
+                 return True
+ 
+-            if country in geolst:
++            if country in geolst or 'COUNTRY:{0}'.format(country) in geolst:
+                 if config['log_hits'] and config['log_verbose'] and listname:
+-                    logging.warning('{0}-GEO-COUNTRY-HIT [{1}]: {2} -> {3}'.format(valuetype, listname, testvalue, country))
++                    logging.warning('{0}-GEO-COUNTRY-HIT [{1}]: {2} -> {3} ({4})'.format(valuetype, listname, testvalue, country, giploc))
+                 return True
+ 
+-            if area in geolst:
++            if area in geolst or 'AREA:{0}'.format(area) in geolst:
+                 if config['log_hits'] and config['log_verbose'] and listname:
+-                    logging.warning('{0}-GEO-AREA-HIT [{1}]: {2} -> {3}'.format(valuetype, listname, testvalue, area))
++                    logging.warning('{0}-GEO-AREA-HIT [{1}]: {2} -> {3} ({4})'.format(valuetype, listname, testvalue, area, giploc))
+                 return True
+ 
+-            if city in geolst:
++            if city in geolst or 'CITY:{0}'.format(city) in geolst:
+                 if config['log_hits'] and config['log_verbose'] and listname:
+-                    logging.warning('{0}-GEO-CITY-HIT [{1}]: {2} -> {3}'.format(valuetype, listname, testvalue, city))
++                    logging.warning('{0}-GEO-CITY-HIT [{1}]: {2} -> {3} ({4})'.format(valuetype, listname, testvalue, city, giploc))
+                 return True
+ 
+     return False
+@@ -1270,41 +1295,46 @@ def rev_check(testvalue, domlist, tag):
+     return False
+ 
+ 
+-def collapse(name, answer, qid):
++def collapse(name, rdtype, answer, qid):
+     if answer:
+-        if config['collapse'] and answer[0].rdtype == 5: # CNAME
+-            new_answer = []
+-            beforecount = 0
+-            aftercount = 0
+-            removed = 0
+-            ttl = answer[-1].ttl
+-            newaddrs = list()
+-
+-            for rrset in answer:
+-                rrname = str(rrset.name)
+-                beforecount += len(rrset)
+-                if rrset.rdtype in (1, 28): # A and AAAA
+-                    aftercount += len(rrset)
+-                    addrs = list(map(str, rrset))
+-
+-                    if addrs:
+-                        #newaddrs = newaddrs + addrs
+-                        newaddrs += addrs
+-                        new_answer.append(dns.rrset.from_text_list(name, ttl, 'IN', dns.rdatatype.to_text(rrset.rdtype), addrs))
+-
+-                elif config['log_collapse']:
+-                    for r in list(map(str, rrset)):
+-                        removed -= 1
+-                        logging.info('COLLAPSE [{0}]: Removed CNAME \"{1}\" -> \"{2}\" ({3})'.format(qid, rrname, r, removed))
+-
+-            if new_answer:
+-                if config['log_collapse']:
+-                    if config['log_verbose']:
+-                        logging.info('COLLAPSE [{0}]: Generated: \"{1}\" -> {2} ({3})'.format(qid, name, ', '.join(newaddrs), len(newaddrs)))
+-                    logging.info('COLLAPSE [{0}]: \"{1}\" went from {2} to {3} RRs ({4})'.format(qid, name, beforecount, aftercount, removed))
+-
+-                return new_answer
+-
++        if config['collapse'] and answer[0].rdtype == 5 and rdtype != 5:
++            #if answer[-1].rdtype in (1, 28): # CNAME and A/AAAA
++            if answer[-1].rdtype == rdtype: # Needs to end in rdtype
++                new_answer = []
++                beforecount = 0
++                aftercount = 0
++                removed = 0
++                ttl = answer[-1].ttl
++                newrrdata = list()
++
++                for rrset in answer:
++                    rrname = str(rrset.name)
++                    beforecount += len(rrset)
++                    #if rrset.rdtype in (1, 28): # A and AAAA
++                    if rrset.rdtype == rdtype:
++                        aftercount += len(rrset)
++                        rrdata = list(map(str, rrset))
++
++                        if rrdata:
++                            newrrdata += rrdata
++                            new_answer.append(dns.rrset.from_text_list(name, ttl, 'IN', dns.rdatatype.to_text(rrset.rdtype), rrdata))
++
++                    elif config['log_collapse'] and config['log_verbose']:
++                        for r in list(map(str, rrset)):
++                            removed -= 1
++                            logging.info('COLLAPSE [{0}]: Removed CNAME \"{1}\" -> \"{2}\" ({3})'.format(qid, rrname, r, removed))
++
++                if new_answer:
++                    if config['log_collapse']:
++                        if config['log_verbose']:
++                            logging.info('COLLAPSE [{0}]: Generated: \"{1}\" -> {2} ({3} RRs)'.format(qid, name, ', '.join(newrrdata), len(newrrdata)))
++                        logging.info('COLLAPSE [{0}]: \"{1}\" went from {2} to {3} RRs ({4})'.format(qid, name, beforecount, aftercount, removed))
++
++                    return new_answer
++            else:
++                if config['log_verbose']:
++                    logging.warning('COLLAPSE [{0}]: \"{1}\" cannot be collapsed - no {2}'.format(qid, name, dns.rdatatype.to_text(rdtype)))
++            
+     return answer
+ 
+ 
+@@ -1358,6 +1388,10 @@ def dns_query(name, rdclass, rdtype, qid, cip, unfilter, fttl):
+ 
+     cachename = '{0}/IN/{1}'.format(qname, qrdtype)
+ 
++    rv = None
++    returnstatus = 'OK'
++    blacklistname = False
++
+     if is_ip.search(cip):
+         if check_badip(cip):
+             soa = dns.rrset.from_text(qname, config['blacklist_ttl'], 'IN', 6, 'blocked.{0}. bad.ip. {1} 60 60 60 60'.format(regex.sub(':', '.', cip), int(time.time())))
+@@ -1377,10 +1411,11 @@ def dns_query(name, rdclass, rdtype, qid, cip, unfilter, fttl):
+         unfilter = True
+ 
+     if unfilter or config['smartip']:
+-        #fttl = config['unfilter_ttl']
++        if unfilter:
++           returnstatus = 'OK-UNFILTERED'
+         cachename = '{0}/{1}'.format(cachename, cip)
+ 
+-    else:
++    if not unfilter:
+         if qrdtype == 'ANY' and config['blockany']:
+             logging.warning('BLOCK-ANY-HIT [{0}]: {1}'.format(qid, cachename))
+             soa = dns.rrset.from_text(qname, config['blacklist_ttl'], 'IN', 6, 'blocked. any. {0} 60 60 60 60'.format(int(time.time())))
+@@ -1398,10 +1433,6 @@ def dns_query(name, rdclass, rdtype, qid, cip, unfilter, fttl):
+             soa = dns.rrset.from_text(qname, config['blacklist_ttl'], 'IN', 6, 'blocked. formerr. {0} 60 60 60 60'.format(int(time.time())))
+             return (dns.rcode.FORMERR, [], [soa], [])
+ 
+-    rv = None
+-    returnstatus = 'OK'
+-    blacklistname = False
+-
+     if qname.endswith('.command.'):
+         command = regex.sub('\.command\.$', '', qname).upper()
+         if command and ((cip in command_acl4) or (cip in command_acl6)):
+@@ -1497,11 +1528,10 @@ def dns_query(name, rdclass, rdtype, qid, cip, unfilter, fttl):
+             left = int(expires - time.time())
+             if left > 0:
+                 if gcachename == cachename:
+-                    result = update_ttls(result, left)
++                    result, _ = update_ttls(qid, qname, result, left, False)
+                     if config['log_caching'] and config['log_hits'] and is_ip.search(cip):
+-                        #logging.info('CACHE-HIT [{0}]: {1} = {2} (TTL-LEFT:{3}) - {4}'.format(qid, cachename, dns.rcode.to_text(result[0]), left, result[4]))
+                         log_helper(qname, qrdtype, result, 'RESPONSE-FROM-CACHE', qid)
+-                    return (result[0], result[1], result[2], result[3], result[4])
++                    return result
+ 
+                 elif config['parent_cache_hit']:
+                     if result[0] != 0: # Parent cache not NOERROR
+@@ -1615,7 +1645,7 @@ def dns_query(name, rdclass, rdtype, qid, cip, unfilter, fttl):
+ 
+                             if rcode == dns.rcode.NOERROR and qresponse:
+                                 qresponse.insert(0, dns.rrset.from_text(qname, config['spoof_ttl'], 'IN', 5, spoof)) # IN/CNAME
+-                                #qresponse = collapse(qname, qresponse, qid)
++                                #qresponse = collapse(qname, rdtype, qresponse, qid)
+                                 rv = (dns.rcode.NOERROR, qresponse, [], [])
+                                 spoof = 'ALIAS'
+                             elif rcode:
+@@ -1679,27 +1709,23 @@ def dns_query(name, rdclass, rdtype, qid, cip, unfilter, fttl):
+             if is_ip.search(cip):
+                 log_helper(qname, rdtype, (rcode, response.answer, response.authority, response.additional), 'RESPONSE-FROM-SERVER', qid)
+ 
+-            seen = set()
+-            seen.add(str(qname)) # To skip first qname entry as already checked
+-
+             if rcode == 'NOERROR':
++                seen = set()
++                seen.add(str(qname)) # To skip first qname entry as already checked
++
+                 status = None
+ 
+                 if fwdtag == 'DEFAULT' and config['filtering'] and config['filter_response'] and unfilter is False:
+-                    response.answer = normttl(qname, response.answer, qid, fttl)
+-                    #response.authority = normttl(qname, response.authority, qid, fttl)
+-                    #response.additional = normttl(qname, response.additional, qid, fttl)
+-
+                     if returnstatus != 'OK': # eg, not WHITELISTED
+                         status = False
+                     else:
+                         for rrset in response.answer: # + response.authority + response.additional:
+-                            rdtype = dns.rdatatype.to_text(rrset.rdtype)
++                            rrdtype = dns.rdatatype.to_text(rrset.rdtype)
+                             rrname = str(rrset.name)
+                             if rrname not in seen:
+                                 seen.add(rrname) # Unduplicate data/qname chain
+                                 #logging.debug('RESPONSE-CHAIN-NAME-CHECK [{0}]: {1}'.format(qid, rrset.name))
+-                                if is_formerr('CHAIN-NAME', rrname, rdtype):
++                                if is_formerr('CHAIN-NAME', rrname, rrdtype):
+                                     status = True
+                                     blacklistname = rrname
+                                     break
+@@ -1714,7 +1740,7 @@ def dns_query(name, rdclass, rdtype, qid, cip, unfilter, fttl):
+                                            returnstatus = 'WHITELISTED'
+                                            break
+ 
+-                            if rdtype in ('A', 'AAAA', 'CNAME', 'MX', 'NS', 'PTR', 'SRV'):
++                            if rrdtype in ('A', 'AAAA', 'CNAME', 'MX', 'NS', 'PTR', 'SRV'):
+                                 for rr in rrset.copy():
+                                     if hasattr(rr, 'target'):
+                                         target = str(rr.target)
+@@ -1723,27 +1749,27 @@ def dns_query(name, rdclass, rdtype, qid, cip, unfilter, fttl):
+                                     else:
+                                         target = str(rr)
+ 
+-                                    #logging.debug('RR [{0}]: {1}/{2}={3}'.format(qid, rrname, rdtype, target))
++                                    #logging.debug('RR [{0}]: {1}/{2}={3}'.format(qid, rrname, rrdtype, target))
+ 
+                                     if target not in seen:
+                                         seen.add(target)
+                                         #logging.debug('RESPONSE-TARGET-CHECK [{0}]: {1}'.format(qid, target))
+ 
+-                                        if is_formerr('RESPONSE', target, rdtype):
++                                        if is_formerr('RESPONSE', target, rrdtype):
+                                             status = True
+                                             returnstatus = 'BLACKLISTED'
+                                             blacklistname = target
+                                             break
+-                                        elif is_ip.search(target) and (config['redirect_ip'] and target in config['redirect_ip']):
++                                        elif rrdtype in ('A', 'AAAA') and (config['redirect_ip'] and target in config['redirect_ip']):
+                                             logging.warning('REDIRECT-IP-HIT: {0} -> {1}'.format(rrname, target))
+                                             status = False
+                                             returnstatus = 'WHITELISTED'
+                                             break
+                                         else:
+-                                            if rdtype in ('A', 'AAAA'):
++                                            if rrdtype in ('A', 'AAAA'):
+                                                 status = is_blacklisted(target, 'DATA', True)
+                                             else:
+-                                                if rdtype == 'CNAME':
++                                                if rrdtype == 'CNAME':
+                                                     tag = 'CNAME-CLOAK'
+                                                 else:
+                                                     tag = 'DATA-NAME'
+@@ -1752,7 +1778,7 @@ def dns_query(name, rdclass, rdtype, qid, cip, unfilter, fttl):
+ 
+                                             if status is not None:
+                                                 if status is True: # Blacklisted
+-                                                    if config['remove_ip'] and rdtype in ('A', 'AAAA'): # Remove IP from answer instead of blocking whole
++                                                    if config['remove_ip'] and rrdtype in ('A', 'AAAA'): # Remove IP from answer instead of blocking whole
+                                                         rrset.remove(rr)
+                                                         rrcount = len(rrset)
+                                                         if qname == rrname:
+@@ -1773,6 +1799,7 @@ def dns_query(name, rdclass, rdtype, qid, cip, unfilter, fttl):
+                                                         returnstatus = 'BLACKLISTED'
+                                                         blacklistname = target
+                                                         break
++
+                                                 else: # Whitelisted
+                                                     status = False
+                                                     returnstatus = 'WHITELISTED'
+@@ -1789,11 +1816,12 @@ def dns_query(name, rdclass, rdtype, qid, cip, unfilter, fttl):
+                     returnstatus = 'BLACKLISTED'
+                     rv = (config['blacklist_rcode'], [], [], [])
+                 else:
+-                    response.answer = normttl(qname, response.answer, qid, fttl)
+                     before = len(response.answer)
+-                    response.answer = collapse(qname, response.answer, qid)
++                    response.answer = collapse(qname, rdtype, response.answer, qid)
++
+                     if len(response.answer) != before:
+                          returnstatus = '{0}-COLLAPSED'.format(returnstatus)
++
+                     rv = (response.rcode(), response.answer, response.authority, response.additional)
+ 
+ 
+@@ -1809,14 +1837,22 @@ def dns_query(name, rdclass, rdtype, qid, cip, unfilter, fttl):
+             log_helper(qname, qrdtype, rv, 'RESPONSE-FROM-{0}'.format(cip), qid)
+ 
+         if config['fix_noerror'] and rcode == dns.rcode.NOERROR and num < 1:
+-            logging.info('FIX-NOERROR-ZERO-ANSWER [{0}]: {1} NOERROR -> NXDOMAIN'.format(qid, cachename))
+-            rcode = dns.rcode.NXDOMAINY
+-            rv = (dns.rcode.NXDOMAIN, [], [], [])
+-        elif config['fix_nxdomain'] and rcode == dns.rcode.NXDOMAIN:
+-            logging.info('FIX-NXDOMAIN [{0}]: {1} NXDOMAIN -> NOERROR/NODATA'.format(qid, cachename))
+-            rcode = dns.rcode.NOERROR
+-            rv = (dns.rcode.NOERROR, [], [], [])
++            logging.warning('FIX-NOERROR-ZERO-ANSWER [{0}]: {1} NOERROR -> NXDOMAIN'.format(qid, cachename))
++            rcode = dns.rcode.NXDOMAIN
++            rv = (dns.rcode.NXDOMAIN, [], rv[2], [])
+ 
++        if config['fix_nxdomain'] and rcode == dns.rcode.NXDOMAIN:
++            logging.warning('FIX-NXDOMAIN [{0}]: {1} NXDOMAIN -> NOERROR/NODATA'.format(qid, cachename))
++            rcode = dns.rcode.NOERROR
++            rv = (dns.rcode.NOERROR, [], rv[2], [])
++
++        #if config['fix_cname'] and rcode == dns.rcode.NOERROR and num > 0 and rv[1][0].rdtype == 5 and (rv[1][-1].rdtype not in (1, 28)): #CNAME and no Address A/AAAA
++        if config['fix_cname'] and rcode == dns.rcode.NOERROR and num > 0 and rv[1][0].rdtype == 5 and rdtype != 5 and rv[1][-1].rdtype != rdtype: #CNAME not ending in requested type
++            logging.warning('FIX-CNAME-NO-{0} [{1}]: {2} -> NXDOMAIN'.format(qrdtype, qid, cachename))
++            returnstatus = '{0}-NOADDRESS'.format(returnstatus)
++            rv = (dns.rcode.NXDOMAIN, [], rv[2], [])
++                         
++        num = countrr(rv[1])
+         rcode = rv[0]
+ 
+         # TTL
+@@ -1876,7 +1912,11 @@ def dns_query(name, rdclass, rdtype, qid, cip, unfilter, fttl):
+ 
+         if ttl and ttl > 0:
+             # All TTLs the same
+-            rv = update_ttls(rv, ttl)
++            checkttl = True # Normalize
++            if not returnstatus.startswith('OK'):
++               checkttl = False
++
++            rv, ttl = update_ttls(qid, qname, rv, ttl, checkttl)
+ 
+             # Cache it
+             if config['log_caching']:
+@@ -1901,9 +1941,42 @@ def countrv(rv):
+     return 0
+ 
+ 
+-def update_ttls(result, left):
++def update_ttls(qid, qname, result, left, check):
+     ttl = max(0, left)
+ 
++    if check:
++        match = check_dom('NAME', qname, forcettl, 'TTL', False, False)
++        if match:
++            logging.info('TTL-OVERRIDE-FORCE [{0}]: Forced from {1} to {2} for {3} ({4})'.format(qid, ttl, forcettl[match], qname, match))
++            ttl = forcettl[match]
++
++        else:
++            lttl = list()
++            for rrset in result[1]:
++                lttl.append(max(1, rrset.ttl))
++
++            if lttl:
++                if config['ttl_strategy'] == 'average':
++                    ttl = int(round(sum(lttl) / len(lttl)))
++
++                elif config['ttl_strategy'] == 'minimum':
++                    ttl = int(min(lttl))
++
++                elif config['ttl_strategy'] == 'maximum':
++                    ttl = int(max(lttl))
++
++            elif result[2]:
++                ttl = int(result[2][-1].ttl) # Get SOA TTL
++
++        if ttl < config['min_ttl']:
++            logging.info('TTL-OVERRIDE-MIN [{0}]: Forced from {1} to {2} for {3}'.format(qid, ttl, config['min_ttl'], qname))
++            #ttl += config['min_ttl']
++            ttl = config['min_ttl']
++
++        elif ttl > config['max_ttl']:
++            logging.info('TTL-OVERRIDE-MAX [{0}]: Forced from {1} to {2} for {3}'.format(qid, ttl, config['max_ttl'], qname))
++            ttl = config['max_ttl']
++
+     for rrset in result[1]:
+         rrset.ttl = ttl
+     for rrset in result[2]:
+@@ -1911,7 +1984,7 @@ def update_ttls(result, left):
+     for rrset in result[3]:
+         rrset.ttl = ttl
+ 
+-    return result
++    return result, ttl
+ 
+ 
+ # !!!! WORK IN PROGRESS
+@@ -1919,20 +1992,26 @@ def update_ttls(result, left):
+ def dox_request(qid, qname, rdtype, cachename, urls, rfc8484, cip):
+     #global requests_session
+ 
++    icip = cip
++    if not is_ip.search(cip):
++        icip = False
++
+     message = dns.message.make_query(encode_0x20(qname), rdtype)
++
+     # Fixup for ANY
+     # https://stackoverflow.com/questions/17681230/how-make-dns-queries-in-dns-python-as-dig-with-additional-records-section
+     if rdtype == dns.rdatatype.ANY:
+         message.flags |= dns.flags.AD
+-        message.find_rrset(message.additional, dns.name.root, 65535, dns.rdatatype.OPT, create=True, force_unique=True)
++        #message.find_rrset(message.additional, dns.name.root, 65535, dns.rdatatype.OPT, create=True, force_unique=True)
++        message.find_rrset(message.additional, dns.name.root, 4096, dns.rdatatype.OPT, create=True, force_unique=True)
+ 
+-    if config['use_ecs_ip'] and cip and is_ip.search(cip):
++    if config['use_ecs_ip'] and icip:
+         ccip = cip
+         bits = 0
+         if cip.find(':') > 0:
+             if config['override_ecs_ip6'] and is_ip6.search(config['override_ecs_ip6']):
+                 ccip = config['override_ecs_ip6']
+-            bits = config['ecs_privacy6'] or 64
++            bits = config['ecs_privacy6'] or 48
+ 
+         else:
+             if config['override_ecs_ip4'] and is_ip4.search(config['override_ecs_ip4']):
+@@ -1940,7 +2019,7 @@ def dox_request(qid, qname, rdtype, cachename, urls, rfc8484, cip):
+             bits = config['ecs_privacy4'] or 24
+ 
+         if config['log_ecs'] and ccip != cip:
+-            logging.info('EDNS-CLIENT-SUBNET-OVERRIDE [{0}]: {1} -> {2}'.format(qid, cip, ccip))
++            logging.info('EDNS-CLIENT-SUBNET-OVERRIDE [{0}]: {1} -> {2} ({3})'.format(qid, cip, ccip, geo(ccip)))
+ 
+         ocip = IP(ccip).make_net(str(bits)).strNormal(0) # Convert to network with no mask
+ 
+@@ -1954,7 +2033,7 @@ def dox_request(qid, qname, rdtype, cachename, urls, rfc8484, cip):
+ 
+     af = None
+     aftag = 'Auto-IPv4/6'
+-    if config['smartip'] and is_ip.search(cip):
++    if config['smartip'] and icip:
+         if rdtype == dns.rdatatype.A or is_ip4.search(cip) or ip4arpa.search(qname):
+             af = 2
+             aftag = 'IPv4'
+@@ -2136,49 +2215,6 @@ def countrr(rrsets):
+     return num
+ 
+ 
+-def normttl(qname, answer, qid, newttl):
+-    ttl = 0
+-
+-    if newttl:
+-        ttl = newttl
+-        logging.info('TTL-OVERRIDE-FORCE [{0}]: Forced {1} for {2}'.format(qid, ttl, qname))
+-
+-    elif answer:
+-        match = check_dom('NAME', qname, forcettl, 'TTL', False, False)
+-        if match:
+-            logging.info('TTL-OVERRIDE-FORCE [{0}]: Forced from {1} to {2} for {3} ({4})'.format(qid, ttl, forcettl[match], qname, match))
+-            ttl = forcettl[match]
+-
+-        else:
+-            lttl = list()
+-            for rrset in answer:
+-                lttl.append(max(1, rrset.ttl))
+-
+-            if config['ttl_strategy'] == 'average':
+-                ttl = int(round(sum(lttl) / len(lttl)))
+-
+-            elif config['ttl_strategy'] == 'minimum':
+-                ttl = int(min(lttl))
+-
+-            elif config['ttl_strategy'] == 'maximum':
+-                ttl = int(max(lttl))
+-
+-     
+-            if ttl < config['min_ttl']:
+-                logging.info('TTL-OVERRIDE-MIN [{0}]: Forced from {1} to {2} for {3}'.format(qid, ttl, ttl + config['min_ttl'], qname))
+-                #ttl += config['min_ttl']
+-                ttl = config['min_ttl']
+-
+-            elif ttl > config['max_ttl']:
+-                logging.info('TTL-OVERRIDE-MAX [{0}]: Forced from {1} to {2} for {3}'.format(qid, ttl, config['max_ttl'], qname))
+-                ttl = config['max_ttl']
+-
+-    for rrset in answer:
+-        rrset.ttl = ttl
+-
+-    return answer
+-
+-
+ def log_helper(qname, qrdtype, result, tag, qid):
+     if isinstance(qrdtype, int):
+         qrdtype = dns.rdatatype.to_text(qrdtype)
+@@ -2260,40 +2296,43 @@ def make_our_response(query):
+ 
+ 
+ def geo(client_ip):
+-    cip = expand_ip(client_ip).split('/')[0]
+-    ip6 = False
+-    if cip.find(':') > 0:
+-        ip6 = True
++    if config['geodb']:
++        cip = expand_ip(client_ip).split('/')[0]
++        ip6 = False
++        if cip.find(':') > 0:
++            ip6 = True
+ 
+-    response = geo_cache.get(cip, None)
+-    if response:
+-        return response
++        response = geo_cache.get(cip, None)
++        if response:
++            return response
+ 
+-    response = '?/?/?/?'
++        response = '?/?/?/?'
+ 
+-    if config['geodb'] and is_ip.search(cip):
+-        if cip in ('0.0.0.0', '0000:0000:0000:0000:0000:0000:0000:0000'):
+-            response = '?/?/?/UNSPECIFIED'
++        if config['geodb'] and is_ip.search(cip):
++            if cip in ('0.0.0.0', '0000:0000:0000:0000:0000:0000:0000:0000'):
++                response = '?/?/?/UNSPECIFIED'
+ 
+-        elif cip in ('127.0.0.1', '0000:0000:0000:0000:0000:0000:0000:0001'):
+-            response = '?/?/?/LOCALHOST'
++            elif cip in ('127.0.0.1', '0000:0000:0000:0000:0000:0000:0000:0001'):
++                response = '?/?/?/LOCALHOST'
+ 
+-        elif (ip6 is False and cip in private4) or (ip6 is True and cip in private6):
+-            response = '?/?/?/PRIVATE'
++            elif (ip6 is False and cip in private4) or (ip6 is True and cip in private6):
++                response = '?/?/?/PRIVATE'
+ 
+-        else:
+-            try:
+-                gip = geoip.city(cip)
+-                if gip:
+-                    response = regex.sub('[^a-zA-Z0-9\/\?]+', '', '{0}/{1}/{2}/{3}'.format(gip.city.name or '?', gip.subdivisions.most_specific.name or '?', gip.country.name or '?', gip.continent.name or '?')).upper()
+-            except:
+-                pass
++            else:
++                try:
++                    gip = geoip.city(cip)
++                    if gip:
++                        response = regex.sub('[^a-zA-Z0-9\/\?]+', '', '{0}/{1}/{2}/{3}'.format(gip.city.name or '?', gip.subdivisions.most_specific.name or '?', gip.country.name or '?', gip.continent.name or '?')).upper()
++                except:
++                    pass
+ 
+-    if response == '?/?/?/?':
+-        response = '?/?/?/UNKNOWN'
++        if response == '?/?/?/?':
++            response = '?/?/?/UNKNOWN'
+ 
+-    geo_cache[cip] = response
+-    return response
++        geo_cache[cip] = response
++        return response
++
++    return ''
+ 
+ 
+ def handle_query(raw_data, client_ip):
+@@ -2314,7 +2353,7 @@ def handle_query(raw_data, client_ip):
+ 
+                 if opt.mask in (None, 0, 32, 128):
+                     if config['log_ecs'] and config['log_verbose']:
+-                        logging.info('EDNS-CLIENT-SUBNET [{0}]: Client {1} -> {2}'.format(query.id, client_ip, ipaddr))
++                        logging.info('EDNS-CLIENT-SUBNET [{0}]: Client {1} -> {2} ({3})'.format(query.id, client_ip, ipaddr, geo(ipaddr)))
+                     client_ip = ipaddr
+ 
+                 break
+@@ -2407,6 +2446,7 @@ def handle_query(raw_data, client_ip):
+ 
+     response = make_our_response(query)
+     response.set_rcode(result[0]) or dns.rcode.SERVFAIL
++
+     response.answer = result[1] or []
+     response.authority = result[2] or []
+     response.additional = result[3] or []
+@@ -2693,12 +2733,12 @@ if __name__ == '__main__':
+     config['min_ttl'] = 2400 # https://blog.apnic.net/2019/11/12/stop-using-ridiculously-low-dns-ttls/
+     config['max_ttl'] = 86400
+     config['spoof_ttl'] = 3600
+-    config['ttl_strategy'] = 'average' # average/minimum/maximum
++    config['ttl_strategy'] = 'minimum' # average/minimum/maximum
+ 
+     # Use EDNS CLIENT SUBNET (ECS) IP as client IP (only when /32 or /128)
+     config['use_ecs_ip'] = True
+     config['ecs_privacy4'] = 24 # ECS Privacy for IPv4 - Only show the /24
+-    config['ecs_privacy6'] = 64 # ECS Privacy for IPv6 - Only use the /64
++    config['ecs_privacy6'] = 48 # ECS Privacy for IPv6 - Only use the /48
+     config['override_ecs_ip4'] = False
+     config['override_ecs_ip6'] = False
+ 
+@@ -2788,12 +2828,15 @@ if __name__ == '__main__':
+     # Smart domains (walk domains to see if blacklisted domains are prepended)
+     config['smartdoms'] = True
+ 
+-    # Fix NOERROR and zero answer answees to NXDOMAIN
++    # Fix NOERROR and zero answer answers to NXDOMAIN
+     config['fix_noerror'] = False
+ 
+     # Fix NXDOMAIN to empty NOERROR
+     config['fix_nxdomain'] = False
+ 
++    # Fix CNAME with no address-records
++    config['fix_cname'] = True
++
+     # Useragent
+     config['useragent'] = 'DEUGNIETS/2.x'
+ 

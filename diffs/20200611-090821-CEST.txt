@@ -1,0 +1,93 @@
+diff --git a/Dockerfile b/Dockerfile
+index 5b3f4b5..4b3b14f 100644
+--- a/Dockerfile
++++ b/Dockerfile
+@@ -1,23 +1,13 @@
+ # To build: 
+ #     docker build -t deugniets .
+ # To run:
+-#     docker run -p 53:53/udp deugniets
++#     docker run -d --rm --network host --name deugniets deugniets
+ #
+-# !!! NOTE: IPv6 needs fixing
+-
+-FROM python:3
++FROM python:alpine
++RUN apk upgrade --update && apk add --no-cache tzdata && cp /usr/share/zoneinfo/Europe/Amsterdam /etc/localtime && apk del tzdata
++RUN apk add --no-cache --virtual build-dependencies build-base gcc openssl-dev libffi-dev git
+ EXPOSE 53/udp
+-ADD deugniets.py deugniets.py
+-ADD cache.py cache.py
+-ADD requirements.txt requirements.txt
+-ADD deugniets.conf.docker deugniets.conf
+-ADD local.list.docker local.list
+-RUN pip3 install --upgrade pip
+-RUN pip3 install --upgrade chardet==3.0.4
+-RUN pip3 install --upgrade urllib3==1.25.7
+-RUN pip3 install --upgrade git+https://github.com/opendns/dnspython-clientsubnetoption@master
+-RUN pip3 install --upgrade git+https://github.com/rthalley/dnspython@master
+-RUN pip3 install --upgrade git+https://github.com/psf/requests@master
+-RUN pip3 install --upgrade -r requirements.txt
+-CMD [ "python3", "deugniets.py", "deugniets.conf" ]
+-
++ADD *.py *.docker ./
++RUN pip3 install --upgrade pip cachetools chardet==3.0.4 urllib3==1.25.7 cryptography geoip2 idna IPy netaddr pygtrie python-hosts pytricia regex git+https://github.com/psf/requests@master git+https://github.com/rthalley/dnspython@master git+https://github.com/opendns/dnspython-clientsubnetoption@master
++RUN apk del build-dependencies build-base gcc libffi-dev git
++CMD [ "python3", "deugniets.py", "deugniets.conf.docker" ]
+diff --git a/deugniets.conf.docker b/deugniets.conf.docker
+index 3cd1280..bc89b2e 100644
+--- a/deugniets.conf.docker
++++ b/deugniets.conf.docker
+@@ -4,7 +4,7 @@ port = 53
+ nameservers = ["9.9.9.9", "149.112.112.9", "2620:fe::9", "2620:fe::fe:9"]
+ 
+ optimize = false
+-whitelist = ["local.list", "https://raw.githubusercontent.com/cbuijs/accomplist/master/deugniets/deugniets.white.list"]
++whitelist = ["safesearch.docker", "https://raw.githubusercontent.com/cbuijs/accomplist/master/deugniets/deugniets.white.list"]
+ blacklist = ["https://raw.githubusercontent.com/cbuijs/accomplist/master/deugniets/deugniets.black.list"]
+ 
+ blacklist_rcode = "REFUSED"
+diff --git a/deugniets.py b/deugniets.py
+index 568dd6a..4b22c03 100644
+--- a/deugniets.py
++++ b/deugniets.py
+@@ -3118,10 +3118,10 @@ def run_server():
+     udp_server_thread4 = threading.Thread(target=udp_server4.serve_forever)
+     udp_server_thread6 = threading.Thread(target=udp_server6.serve_forever)
+ 
+-    #tcp_server4 = ThreadedTCPServer4(('', dnsport), TCPHandler)
+-    #tcp_server6 = ThreadedTCPServer6(('', dnsport), TCPHandler)
+-    #tcp_server_thread4 = threading.Thread(target=tcp_server4.serve_forever)
+-    #tcp_server_thread6 = threading.Thread(target=tcp_server6.serve_forever)
++    tcp_server4 = ThreadedTCPServer4(('', dnsport), TCPHandler)
++    tcp_server6 = ThreadedTCPServer6(('', dnsport), TCPHandler)
++    tcp_server_thread4 = threading.Thread(target=tcp_server4.serve_forever)
++    tcp_server_thread6 = threading.Thread(target=tcp_server6.serve_forever)
+ 
+     newnameservers = list()
+ 
+diff --git a/local.list.docker b/local.list.docker
+deleted file mode 100644
+index 4bf3e76..0000000
+--- a/local.list.docker
++++ /dev/null
+@@ -1,19 +0,0 @@
+-# CAUTION: USE THIS FILE CAREFULLY AND REVIEW IT FIRST BEFORE USING!!!
+-
+-# Google/Youtube/Bing/DuckDuckGo restrict/safesearch
+-www.google.com = forcesafesearch.google.com
+-www.google.nl = forcesafesearch.google.com
+-www.google.fr = forcesafesearch.google.com
+-
+-www.youtube.com = restrictmoderate.youtube.com
+-m.youtube.com = restrictmoderate.youtube.com
+-youtubei.googleapis.com = restrictmoderate.youtube.com
+-youtube.googleapis.com = restrictmoderate.youtube.com
+-www.youtube-nocookie.com = restrictmoderate.youtube.com
+-
+-bing.com = strict.bing.com
+-
+-duckduckgo.com = safe.duckduckgo.com
+-
+-pixabay.com = safesearch.pixabay.com
+-

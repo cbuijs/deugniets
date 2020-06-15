@@ -1,0 +1,30 @@
+diff --git a/deugniets.py b/deugniets.py
+index 4ee3383..38234bc 100644
+--- a/deugniets.py
++++ b/deugniets.py
+@@ -1360,10 +1360,11 @@ def dns_query(name, rdclass, rdtype, qid, cip, unfilter, fttl):
+ 
+     cachename = '{0}/IN/{1}'.format(qname, qrdtype)
+ 
+-    if cip in private4 or cip in private6:
+-        cachename = '{0}/IN/{1}'.format(qname, qrdtype)
+-    else:
+-        cachename = '{0}/IN/{1}/PUBLIC'.format(qname, qrdtype)
++    if cip not in private4 and cip not in private6:
++        cachename = '{0}/{1}'.format(cachename, 'PUBLIC')
++
++    if unfilter:
++        cachename = '{0}/{1}'.format(cachename, cip)
+ 
+     if check_badip(cip):
+         return (dns.rcode.REFUSED, [], [], [])
+@@ -1386,9 +1387,6 @@ def dns_query(name, rdclass, rdtype, qid, cip, unfilter, fttl):
+         #return (dns.rcode.SERVFAIL, [], [], [])
+         return (dns.rcode.FORMERR, [], [], [])
+ 
+-    if unfilter:
+-        cachename = '{0}/{1}'.format(cachename, cip)
+-
+     rv = None
+     returnstatus = 'OK'
+     blacklistname = False

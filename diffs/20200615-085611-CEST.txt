@@ -1,0 +1,31 @@
+diff --git a/cache.py b/cache.py
+index 0f9a2fe..59b05dd 100644
+--- a/cache.py
++++ b/cache.py
+@@ -1,4 +1,4 @@
+-# cache.py - v2.22-20200527 - cbuijs@chrisbuijs.com
++# cache.py - v2.30-20200615 - cbuijs@chrisbuijs.com
+ # Based upon: https://github.com/dnaeon/py-vconnector/blob/master/src/vconnector/cache.py
+ 
+ import logging
+diff --git a/deugniets.py b/deugniets.py
+index e93dda3..53b6eb3 100644
+--- a/deugniets.py
++++ b/deugniets.py
+@@ -1770,7 +1770,6 @@ def dns_query(name, rdclass, rdtype, qid, cip, unfilter, fttl):
+                 bits = config['cache_ip4_bits'] or 24
+ 
+             cache_ip = '{0}'.format(IP(cip).make_net(str(bits)).strNormal(0))
+-            logging.info('CACHE-IP: {0} -> {1} (/{2})'.format(cip, cache_ip, bits))
+             cachename = '{0}/{1}'.format(cachename, cache_ip)
+ 
+     else:
+@@ -1781,7 +1780,7 @@ def dns_query(name, rdclass, rdtype, qid, cip, unfilter, fttl):
+         if ip6 is None:
+             logging.info('INTERNAL-{0}-UNFILTER: {1}'.format(cip, cachename))
+ 
+-    logging.info('CACHE-NAME: {0}'.format(cachename))
++    logging.info('CACHE-NAME: {0} for {1}'.format(cachename, cip))
+ 
+     if not unfilter:
+         if qrdtype == 'ANY' and config['blockany']:

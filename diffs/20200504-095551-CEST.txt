@@ -1,0 +1,338 @@
+diff --git a/deugniets.py b/deugniets.py
+index 4a310f8..f59e0ca 100644
+--- a/deugniets.py
++++ b/deugniets.py
+@@ -1,7 +1,7 @@
+ #!/usr/bin/env python3
+ '''
+ ===========================================================================
+- deugniets.py v2.93-20200503 Copyright 2019-2020 by cbuijs@chrisbuijs.com
++ deugniets.py v2.95-20200504 Copyright 2019-2020 by cbuijs@chrisbuijs.com
+ ===========================================================================
+ 
+  Based on: https://github.com/supriyo-biswas/adblock-dns-server
+@@ -903,8 +903,7 @@ def is_formerr(rtype, value, qtype):
+ def is_blacklisted(qname, value, valuetype, checkip):
+     '''Check if blacklisted including simple locking'''
+     if config['filtering'] is False:
+-        return None
+-
++        return None, ''
+ 
+     testvalue = str(value)
+     if not checkip:
+@@ -913,7 +912,7 @@ def is_blacklisted(qname, value, valuetype, checkip):
+     cachename = 'BLACKLISTED#{0}#{1}'.format(valuetype, value)
+     if cachename in check_cache:
+         result = check_cache.get(cachename, None)
+-        return result
++        return result, value
+ 
+     #logging.debug('{0}-BLACKLIST-CHECK: {1}'.format(valuetype, testvalue))
+ 
+@@ -926,11 +925,11 @@ def is_blacklisted(qname, value, valuetype, checkip):
+     if count >= config['retry_count']:
+         logging.error('{0}-BLACKLIST-FAIL: {1} -> {2} - Took to long to check'.format(valuetype, qname, testvalue))
+         check_cache[cachename] = None
+-        return None
++        return None, ''
+ 
+     beingchecked.add(testvalue)
+ 
+-    result = check_blacklisted(qname, testvalue, valuetype, checkip)
++    result, hitdata = check_blacklisted(qname, testvalue, valuetype, checkip)
+ 
+     #logging.debug('{0}-CHECK-RESULT: {1} = {2}'.format(valuetype, testvalue, result))
+ 
+@@ -938,7 +937,7 @@ def is_blacklisted(qname, value, valuetype, checkip):
+ 
+     beingchecked.discard(testvalue)
+ 
+-    return result
++    return result, hitdata
+ 
+ 
+ def check_blacklisted(qname, testvalue, valuetype, checkip):
+@@ -947,12 +946,12 @@ def check_blacklisted(qname, testvalue, valuetype, checkip):
+ 
+     if config['blockip4'] and ((checkip is False and ip4arpa.search(testvalue)) or (checkip is True and is_ip4.search(testvalue))):
+         if config['log_hits']:
+-            logging.warning('{0}-IPV4-HIT: {1}'.format(valuetype, testvalue))
+-        return True
++            logging.warning('{0}-IPV4-HIT: \"{1}\" -> {2}'.format(valuetype, qname, testvalue))
++        return True, testvalue
+     elif config['blockip6'] and ((checkip is False and ip6arpa.search(testvalue)) or (checkip is True and is_ip6.search(testvalue))):
+         if config['log_hits']:
+-             logging.warning('{0}-IPV6-HIT: {1}'.format(valuetype, testvalue))
+-        return True
++             logging.warning('{0}-IPV6-HIT: \"{1}\" -> {2}'.format(valuetype, qname, testvalue))
++        return True, testvalue
+ 
+     # Check against domain
+     if checkip is False and is_dom.search(testvalue):
+@@ -962,16 +961,21 @@ def check_blacklisted(qname, testvalue, valuetype, checkip):
+         if wcheck:
+             #if config['block_specific'] and wcheck != testvalue and testvalue in bl_dom:
+             if config['block_specific'] and wcheck != testvalue and testvalue[::-1] in bl_dom_trie:
+-                logging.warning('SPECIFIC-NAME-DOM-HIT [BLACKLIST]: \"{0}\" (Parent \"{1}\" is WHITELISTED)'.format(testvalue, wcheck))
+-                return True
++                if qname != testvalue:
++                    logging.warning('{0}-SPECIFIC-NAME-DOM-HIT [BLACKLIST]: \"{1}\" -> \"{2}\" (Parent \"{3}\" is WHITELISTED)'.format(valuetype, qname, testvalue, wcheck))
++                else:
++                    logging.warning('{0}-SPECIFIC-NAME-DOM-HIT [BLACKLIST]: \"{1}\" (Parent \"{2}\" is WHITELISTED)'.format(valuetype, testvalue, wcheck))
++                return True, wcheck
+ 
+             #if config['smartdoms'] and check_dom_smart('WHITELIST', testvalue, bl_dom, 'BLACKLIST', True):
+-            if config['smartdoms'] and check_dom_smart_trie('WHITELIST', testvalue, bl_dom_trie, 'BLACKLIST', True, wcheck):
+-                return True
+-            return False
++            if config['smartdoms']:
++                bcheck = check_dom_smart_trie('WHITELIST', testvalue, bl_dom_trie, 'BLACKLIST', True, wcheck)
++                if bcheck:
++                    return True, bcheck
++            return False, wcheck
+ 
+         if check_rx(valuetype, orgtestvalue, wl_rx, wl_big_rx, 'WHITELIST'):
+-            return False
++            return False, 'WHITEREGEX'
+ 
+         #if config['check_ratio']:
+         #    if check_ratio(valuetype, testvalue, wl_dom, 'WHITELIST'):
+@@ -981,17 +985,20 @@ def check_blacklisted(qname, testvalue, valuetype, checkip):
+             if not tld_rx.search(testvalue): # Invalid TLD
+                 if config['log_hits']:
+                     logging.warning('{0}-NXTLD-HIT: {1}'.format(valuetype, testvalue))
+-                return True
++                return True, '{0}.'.format(testvalue.strip('.').split('.')[-1])
+ 
+         #if check_dom(valuetype, testvalue, bl_dom, 'BLACKLIST', False, config['smartdoms']): # Blacklisted
+-        if check_dom_trie(valuetype, testvalue, bl_dom_trie, 'BLACKLIST', False, config['smartdoms']): # Blacklisted
++        bcheck = check_dom_trie(valuetype, testvalue, bl_dom_trie, 'BLACKLIST', False, config['smartdoms']) # Blacklisted
++        if bcheck:
+             #if config['smartdoms'] and check_dom_smart('BLACKLIST', testvalue, alias, 'ALIAS', True):
+-            if config['smartdoms'] and check_dom_trie('BLACKLIST', testvalue, alias_trie, 'ALIAS', False, False):
+-                return False
+-            return True
++            if config['smartdoms']:
++                acheck = check_dom_trie('BLACKLIST', testvalue, alias_trie, 'ALIAS', False, False)
++                if acheck:
++                    return False, acheck
++            return True, bcheck
+ 
+         if check_rx(valuetype, orgtestvalue, bl_rx, bl_big_rx, 'BLACKLIST'):
+-            return True
++            return True, "BLACK-REGEX"
+ 
+         #if config['check_ratio']:
+         #    if check_ratio(valuetype, testvalue, bl_dom, 'BLACKLIST'):
+@@ -1018,52 +1025,60 @@ def check_blacklisted(qname, testvalue, valuetype, checkip):
+         if ip4:
+             #logging.debug('CHECK-{0}: {1} is an IPv4-Address'.format(valuetype, testvalue))
+             # Check if IPv4 is whitelisted
+-            if check_ip(qname, valuetype, testvalue, orgtestvalue, wl_ip4, 'WHITELIST', False):
+-                return False
++            ipcheck, hitdata = check_ip(qname, valuetype, testvalue, orgtestvalue, wl_ip4, 'WHITELIST', False)
++            if ipcheck:
++                return False, hitdata
+ 
+             # Check if IPv4 is blacklisted
+-            if check_ip(qname, valuetype, testvalue, orgtestvalue, bl_ip4, 'BLACKLIST', True):
++            ipcheck, hitdata = check_ip(qname, valuetype, testvalue, orgtestvalue, bl_ip4, 'BLACKLIST', True)
++            if ipcheck:
+                 #if rev_check(testvalue, wl_dom, 'WHITELIST'):
+-                if rev_check_trie(testvalue, wl_dom_trie, 'WHITELIST'):
+-                    return False
++                rcheck = rev_check_trie(testvalue, wl_dom_trie, 'WHITELIST')
++                if rcheck:
++                    return False, rcheck
+                 else:
+-                    return True
++                    return True, hitdata
+ 
+ 
+         # Check against IP6
+         else:
+             #logging.debug('CHECK-{0}: {1} is an IPv6-Address'.format(valuetype, testvalue))
+             # Check if IPv6 is whitelisted
+-            if check_ip(qname, valuetype, testvalue, orgtestvalue, wl_ip6, 'WHITELIST', False):
+-                return False
++            ipcheck, hitdata = check_ip(qname, valuetype, testvalue, orgtestvalue, wl_ip6, 'WHITELIST', False)
++            if ipcheck:
++                return False, hitdata
+ 
+             # Check if IPv6 is blacklisted
+-            if check_ip(qname, valuetype, testvalue, orgtestvalue, bl_ip6, 'BLACKLIST', True):
++            ipcheck, hitdata = check_ip(qname, valuetype, testvalue, orgtestvalue, bl_ip6, 'BLACKLIST', True)
++            if ipcheck:
+                 #if rev_check(testvalue, wl_dom, 'WHITELIST'):
+-                if rev_check_trie(testvalue, wl_dom_trie, 'WHITELIST'):
+-                    return False
++                rcheck = rev_check_trie(testvalue, wl_dom_trie, 'WHITELIST')
++                if rcheck:
++                    return False, rcheck
+                 else:
+-                    return True
++                    return True, hitdata
+ 
+         # Check against GEO
+-        if check_geo(qname, valuetype, testvalue, wl_geo, 'WHITELIST'):
+-            return False
++        gcheck = check_geo(qname, valuetype, testvalue, wl_geo, 'WHITELIST')
++        if gcheck:
++            return False, gcheck
+ 
+-        if check_geo(qname, valuetype, testvalue, bl_geo, 'BLACKLIST'):
+-            return True
++        gcheck = check_geo(qname, valuetype, testvalue, bl_geo, 'BLACKLIST')
++        if gcheck:
++            return True, gcheck
+   
+     # Check against DNSWL/BL
+     if dnsl_check(config['dnswl'], orgtestvalue, checkip):
+         if config['log_hits']:
+             logging.warning('{0}-WHITELIST-DNSL-HIT: \"{1}\"'.format(valuetype, testvalue))
+-        return False
++        return False, orgtestvalue
+ 
+     if dnsl_check(config['dnsbl'], orgtestvalue, checkip):
+         if config['log_hits']:
+             logging.warning('{0}-BLACKLIST-DNSL-HIT: \"{1}\"'.format(valuetype, testvalue))
+-        return True
++        return True, orgtestvalue
+ 
+-    return None
++    return None, ''
+ 
+ 
+ def check_rx(valuetype, testvalue, rxlst, rxbiglst, tag):
+@@ -1214,9 +1229,9 @@ def check_ip(qname, valuetype, testvalue, orgtestvalue, iplist, listname, rc):
+             ip = iplist.get_key(testvalue)
+             logging.warning('{0}-IP-HIT [{1}]: {2} -> {3} -> {4} ({5})'.format(valuetype, listname, qname, orgtestvalue, ip, geo(ip)))
+ 
+-        return rc
++        return rc, ip
+ 
+-    return False
++    return False, ''
+ 
+ 
+ def check_geo(qname, valuetype, testvalue, geolst, listname):
+@@ -1230,22 +1245,22 @@ def check_geo(qname, valuetype, testvalue, geolst, listname):
+         if continent in geolst or 'CONTINENT:{0}'.format(continent) in geolst:
+             if config['log_hits'] and listname:
+                 logging.warning('{0}-GEO-CONTINENT-HIT [{1}]: {2} -> {3} -> {4} ({5})'.format(valuetype, listname, qname, testvalue, continent, giploc))
+-            return True
++            return continent
+ 
+         if country in geolst or 'COUNTRY:{0}'.format(country) in geolst:
+             if config['log_hits'] and listname:
+                 logging.warning('{0}-GEO-COUNTRY-HIT [{1}]: {2} -> {3} -> {4} ({5})'.format(valuetype, listname, qname, testvalue, country, giploc))
+-            return True
++            return country
+ 
+         if area in geolst or 'AREA:{0}'.format(area) in geolst:
+             if config['log_hits'] and listname:
+                 logging.warning('{0}-GEO-AREA-HIT [{1}]: {2} -> {3} -> {4} ({5})'.format(valuetype, listname, qname, testvalue, area, giploc))
+-            return True
++            return area
+ 
+         if city in geolst or 'CITY:{0}'.format(city) in geolst:
+             if config['log_hits'] and listname:
+                 logging.warning('{0}-GEO-CITY-HIT [{1}]: {2} -> {3} -> {4} ({5})'.format(valuetype, listname, qname, testvalue, city, giploc))
+-            return True
++            return city
+ 
+         # Multiples
+         glist = [continent, country, area, city]
+@@ -1262,9 +1277,9 @@ def check_geo(qname, valuetype, testvalue, geolst, listname):
+             if gcheck in geolst:
+                 if config['log_hits'] and config['log_verbose'] and listname:
+                     logging.warning('{0}-GEO-HIT [{1}]: {2} -> {3} -> {4}'.format(valuetype, listname, qname, testvalue, gcheck))
+-                return True
++                return gcheck
+         
+-    return False
++    return False, '?'
+ 
+ 
+ # !!! FIX - Better handling of quotas per dat for AbuseIPDB
+@@ -1398,7 +1413,7 @@ def rev_check_trie(testvalue, trielist, tag):
+                     if target and is_dom.search(target):
+                         if check_dom_trie('NAME', target, trielist, tag, False, False):
+                             logging.warning('IP-REV-PTR-{0}-HIT: {1} = {2} = {3}'.format(tag, testvalue, arpaip, target))
+-                            return True
++                            return target
+ 
+     return False
+ 
+@@ -1563,7 +1578,8 @@ def dns_query(name, rdclass, rdtype, qid, cip, unfilter, fttl):
+ 
+     if unfilter:
+         cachename = '{0}/{1}'.format(cachename, cip)
+-        logging.info('UNFILTER: {0}'.format(cachename))
++        if ip6 is None:
++            logging.info('{0}-UNFILTER: {1}'.format(cip, cachename))
+ 
+     # !!! CHECK for smartip-caching, probably already covered by abive IP4/6 tag
+     #if unfilter or config['smartip']:
+@@ -1752,7 +1768,7 @@ def dns_query(name, rdclass, rdtype, qid, cip, unfilter, fttl):
+             matcha = check_dom_trie('BLACKLISTED', qname, alias_trie, 'ALIAS', False, config['smartdoms'])
+ 
+         if matcha is False:
+-            wmatch = is_blacklisted(qname, qname, 'NAME', False) # Due first, faster due to caching of previous results
++            wmatch, hitdata = is_blacklisted(qname, qname, 'NAME', False) # Due first, faster due to caching of previous results
+             if wmatch is True:
+                 blacklistname = qname
+                 returnstatus = 'BLACKLISTED'
+@@ -1922,7 +1938,7 @@ def dns_query(name, rdclass, rdtype, qid, cip, unfilter, fttl):
+                                     blacklistname = rrname
+                                     break
+                                 else:
+-                                    status = is_blacklisted(qname, rrname, 'CHAIN-NAME', False)
++                                    status, hitdata = is_blacklisted(qname, rrname, 'CHAIN-NAME', False)
+                                     if status is not None:
+                                         if status is True: # Blacklisted
+                                            returnstatus = 'BLACKLISTED'
+@@ -1959,14 +1975,14 @@ def dns_query(name, rdclass, rdtype, qid, cip, unfilter, fttl):
+                                             break
+                                         else:
+                                             if rrdtype in ('A', 'AAAA'):
+-                                                status = is_blacklisted(rrname, target, 'DATA', True)
++                                                status, hitdata = is_blacklisted(rrname, target, 'DATA', True)
+                                             else:
+                                                 if rrdtype == 'CNAME':
+                                                     tag = 'CNAME-CLOAK'
+                                                 else:
+-                                                    tag = 'DATA-NAME'
++                                                    tag = '{0}-DATA'.format(rrdtype)
+ 
+-                                                status = is_blacklisted(rrname, target, tag, False)
++                                                status, hitdata = is_blacklisted(rrname, target, tag, False)
+ 
+                                             if status is not None:
+                                                 if status is True: # Blacklisted
+@@ -1974,9 +1990,9 @@ def dns_query(name, rdclass, rdtype, qid, cip, unfilter, fttl):
+                                                         rrset.remove(rr)
+                                                         rrcount = len(rrset)
+                                                         if qname == rrname:
+-                                                            logging.warning('REMOVED-IP: {0} ({1}) from \"{2}\" ({3} RRs left)'.format(target, geo(target), rrname, rrcount))
++                                                            logging.warning('REMOVED-IP: {0} ({1}) from \"{2}\" -> {3} ({4} RRs left)'.format(target, geo(target), rrname, hitdata, rrcount))
+                                                         else:
+-                                                            logging.warning('REMOVED-IP: {0} ({1}) from \"{2}\" -> \"{3}\" ({4} RRs left)'.format(target, geo(target), qname, rrname, rrcount))
++                                                            logging.warning('REMOVED-IP: {0} ({1}) from \"{2}\" -> \"{3}\" -> {4} ({5} RRs left)'.format(target, geo(target), qname, rrname, hitdata, rrcount))
+ 
+                                                         if rrcount == 0:
+                                                             status = True
+@@ -1987,6 +2003,12 @@ def dns_query(name, rdclass, rdtype, qid, cip, unfilter, fttl):
+                                                         status = None
+ 
+                                                     else:
++                                                        if rrdtype not in ('A', 'AAAA'):
++                                                            cloaklog='\"{0}\" -> \"{1}\" -> \"{2}\"'.format(rrname, target, hitdata)
++                                                            if qname != rrname:
++                                                                 cloaklog = '\"{0}\" -> {1}'.format(qname, cloaklog)
++                                                            logging.warning('{0}-BLACKLIST-CLOAK-HIT: {1}'.format(rrdtype, cloaklog))
++
+                                                         status = True
+                                                         returnstatus = 'BLACKLISTED'
+                                                         blacklistname = target

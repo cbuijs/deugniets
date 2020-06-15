@@ -1,0 +1,206 @@
+diff --git a/deugniets.py b/deugniets.py
+old mode 100755
+new mode 100644
+index fa23597..7adc6ec
+--- a/deugniets.py
++++ b/deugniets.py
+@@ -1,7 +1,7 @@
+ #!/usr/bin/env python3
+ '''
+ =======================================================================
+- deugniets.py v2.332-20191010 Copyright 2019 by cbuijs@chrisbuijs.com
++ deugniets.py v2.35-20191012 Copyright 2019 by cbuijs@chrisbuijs.com
+ =======================================================================
+ 
+  Based on: https://github.com/supriyo-biswas/adblock-dns-server
+@@ -58,6 +58,9 @@ import dns.exception
+ import dns.rdataclass
+ import dns.renderer
+ 
++# ClientSubNetOption
++import clientsubnetoption
++
+ # Regex
+ import regex
+ #import re as regex
+@@ -111,7 +114,7 @@ beingspoofed = set()
+ ul_dom = dict()
+ ul_ip4 = pytricia.PyTricia(32, socket.AF_INET)
+ ul_ip6 = pytricia.PyTricia(128, socket.AF_INET6)
+-cachehits = dict()
++queryhits = dict()
+ 
+ command_acl4 = pytricia.PyTricia(32, socket.AF_INET)
+ command_acl6 = pytricia.PyTricia(128, socket.AF_INET6)
+@@ -314,8 +317,8 @@ def make_doms(domlist):
+     return newdomlist
+ 
+ 
+-def similar(x, y):
+-    return int(SequenceMatcher(None, x, y).ratio() * 100)
++#def similar(x, y):
++#    return int(SequenceMatcher(None, x, y).ratio() * 100)
+ 
+ 
+ def encode_0x20(st):
+@@ -766,9 +769,9 @@ def check_if_blacklisted(testvalue, valuetype, checkip):
+         if check_rx(valuetype, orgtestvalue, wl_rx, 'WHITELIST'):
+             return False
+ 
+-        if config['check_ratio']:
+-            if check_ratio(valuetype, testvalue, wl_dom, 'WHITELIST'):
+-                return False
++        #if config['check_ratio']:
++        #    if check_ratio(valuetype, testvalue, wl_dom, 'WHITELIST'):
++        #        return False
+ 
+         if config['check_tld']:
+             if not tld_rx.search(testvalue): # Invalid TLD
+@@ -782,9 +785,9 @@ def check_if_blacklisted(testvalue, valuetype, checkip):
+         if check_rx(valuetype, orgtestvalue, bl_rx, 'BLACKLIST'):
+             return True
+ 
+-        if config['check_ratio']:
+-            if check_ratio(valuetype, testvalue, bl_dom, 'BLACKLIST'):
+-                return True
++        #if config['check_ratio']:
++        #    if check_ratio(valuetype, testvalue, bl_dom, 'BLACKLIST'):
++        #        return True
+ 
+         # Check if Domain is a rev-arpa domain, if it is, check its IP value
+         ip = False
+@@ -926,17 +929,17 @@ def check_dom_walk(valuetype, testvalue, domlist, listname, onlyparent):
+ 
+ 
+ # !!! WORK-IN-PROGRESS !!!
+-def check_ratio(valuetype, testvalue, domlist, listname):
+-    for dom in domlist: # !!! SPEED THIS UP !!!
+-    #for dom in [x for x in domlist if x.endswith(testvalue) or x.startswith(testvalue)]: # !!! SPEED THIS UP !!!
+-        ratio = similar(dom, testvalue)
+-        #logging.info('RATIO: {0} ~ {1} = {2}'.format(testvalue, dom, ratio))
+-        if ratio > 90:
+-            if config['log_hits'] and listname:
+-                logging.warning('{0}-DOM-RATIO-HIT [{1}]: \"{2}\" ~ \"{3}\" (Ratio:{4})'.format(valuetype, listname, testvalue, dom, ratio))
+-            return dom
+-
+-    return False
++#def check_ratio(valuetype, testvalue, domlist, listname):
++#    for dom in domlist: # !!! SPEED THIS UP !!!
++#    #for dom in [x for x in domlist if x.endswith(testvalue) or x.startswith(testvalue)]: # !!! SPEED THIS UP !!!
++#        ratio = similar(dom, testvalue)
++#        #logging.info('RATIO: {0} ~ {1} = {2}'.format(testvalue, dom, ratio))
++#        if ratio > 90:
++#            if config['log_hits'] and listname:
++#                logging.warning('{0}-DOM-RATIO-HIT [{1}]: \"{2}\" ~ \"{3}\" (Ratio:{4})'.format(valuetype, listname, testvalue, dom, ratio))
++#            return dom
++#
++#    return False
+ 
+ 
+ def check_ip(valuetype, testvalue, orgtestvalue, iplist, listname, rc):
+@@ -1154,7 +1157,7 @@ def dns_query(name, rdclass, rdtype, qid, cip, unfilter, fttl):
+ 
+             elif (command in ('HITS', 'STATS')) and (subcommand in ('BLACKLISTED', 'NONE', 'OK', 'WHITELISTED')):
+                 count = 0
+-                for entry in sorted(cachehits, key=cachehits.get, reverse=True):
++                for entry in sorted(queryhits, key=queryhits.get, reverse=True):
+                     testvalue = entry.split('/')[0]
+                     if testvalue and testvalue.endswith('.command.') is False and testvalue in listed_cache:
+                         blocked = listed_cache.get(testvalue)
+@@ -1167,10 +1170,10 @@ def dns_query(name, rdclass, rdtype, qid, cip, unfilter, fttl):
+                         if subcommand != 'NONE':
+                             if subcommand.lower() == blockedinfo.lower():
+                                 count += 1
+-                                logging.info('STATS-#{0}: {1} had {2} queries ({3})'.format(count, entry, cachehits.get(entry, 0), blockedinfo))
++                                logging.info('STATS-#{0}: {1} had {2} queries ({3})'.format(count, entry, queryhits.get(entry, 0), blockedinfo))
+                         else:
+                             count += 1
+-                            logging.info('STATS-#{0}: {1} had {2} queries ({3})'.format(count, entry, cachehits.get(entry, 0), blockedinfo))
++                            logging.info('STATS-#{0}: {1} had {2} queries ({3})'.format(count, entry, queryhits.get(entry, 0), blockedinfo))
+ 
+             else:
+                 logging.error('COMMAND-UNKNOWN: {0}'.format(command))
+@@ -1663,7 +1666,7 @@ def clear_caches():
+     listed_cache.clear()
+     unfilter_ip_cache.clear()
+     unfilter_dom_cache.clear()
+-    cachehits.clear()
++    queryhits.clear()
+     gc.collect()
+     return True
+ 
+@@ -1785,6 +1788,14 @@ def handle_query(raw_data, client_ip):
+         logging.error('REQUEST-ERROR: Query from {0} - {1}'.format(client_ip, e))
+         return
+ 
++    if config['use_edns_ip'] and hasattr(query, 'options'):
++        for opt in query.options:
++            if hasattr(opt, 'ip') and hasattr(opt, 'mask'):
++                logging.info('EDNS0-ECS [{0}]: Client {1} provides {2}'.format(query.id, client_ip, IP('{0}/{1}'.format(opt.ip, opt.mask)).strNormal(1)))
++                if opt.mask in (32, 128):
++                    client_ip = IP('{0}/{1}'.format(opt.ip, opt.mask)).strNormal(0)
++                    break
++
+     name = str(query.question[0].name).lower()
+ 
+     cip = str(client_ip)
+@@ -1798,10 +1809,10 @@ def handle_query(raw_data, client_ip):
+     #else:
+     #    bname = queryname
+ 
+-    if queryname in cachehits:
+-        cachehits[queryname] += 1
++    if queryname in queryhits:
++        queryhits[queryname] += 1
+     else:
+-        cachehits[queryname] = 1
++        queryhits[queryname] = 1
+ 
+     count = 0
+     while count < config['retry_count'] and bname in beingchecked:
+@@ -1817,7 +1828,7 @@ def handle_query(raw_data, client_ip):
+     beingchecked.add(bname)
+ 
+     if config['log_requests']:
+-        logging.info('REQUEST [{0}]: {1} from {2} ({3} queries)'.format(query.id, queryname, cip, cachehits.get(queryname, 0)))
++        logging.info('REQUEST [{0}]: {1} from {2} ({3} queries)'.format(query.id, queryname, cip, queryhits.get(queryname, 0)))
+ 
+     response = make_response(query)
+     servfail = False
+@@ -2038,6 +2049,9 @@ if __name__ == '__main__':
+     config['max_ttl'] = 86400
+     config['spoof_ttl'] = 3600
+ 
++    # Use EDNS ECS IP as client IP (only when /32 or /128)
++    config['use_edns_ip'] = True
++
+     # Random RoundRobin
+     config['roundrobin'] = True
+     config['randomroundrobin'] = False
+@@ -2195,6 +2209,17 @@ if __name__ == '__main__':
+             logging.error('BIG-REGEX-COMPILE-ERROR: {0}'.format(err))
+             sys.exit(1)
+ 
++        # Whitelist Local/Private IPv4's
++        wl_ip4['127.0.0.0/8'] = 'Private'
++        wl_ip4['10.0.0.0/8'] = 'Private'
++        wl_ip4['172.16.0.0/12'] = 'Private'
++        wl_ip4['192.168.0.0/16'] = 'Private'
++
++        # Whitelist Local/Private IPv4's
++        wl_ip6['::1/128'] = 'Private'
++        wl_ip6['fc00::/7'] = 'Private'
++        wl_ip6['fe80::/10'] = 'Private'
++
+         if config['optimize']:
+             wl_dom = undom(wl_dom, wl_dom, 'WHITELIST-WHITELIST', True)
+             bl_dom = undom(bl_dom, bl_dom, 'BLACKLIST-BLACKLIST', True)
+diff --git a/requirements.txt b/requirements.txt
+index 85e8c58..e111bd6 100644
+--- a/requirements.txt
++++ b/requirements.txt
+@@ -1,3 +1,4 @@
++clientsubnetoption>=2.1.1
+ dnspython>=2.0.0
+ idna>=2.8
+ IPy>=1.0

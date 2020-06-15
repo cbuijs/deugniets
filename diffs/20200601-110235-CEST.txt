@@ -1,0 +1,95 @@
+diff --git a/deugniets.py b/deugniets.py
+index 5a7fc22..95e89c8 100644
+--- a/deugniets.py
++++ b/deugniets.py
+@@ -1,7 +1,7 @@
+ #!/usr/bin/env python3
+ '''
+ ===========================================================================
+- deugniets.py v3.13-20200529 Copyright 2019-2020 by cbuijs@chrisbuijs.com
++ deugniets.py v3.14-20200601 Copyright 2019-2020 by cbuijs@chrisbuijs.com
+ ===========================================================================
+ 
+  Based on: https://github.com/supriyo-biswas/adblock-dns-server
+@@ -1110,7 +1110,7 @@ def check_blacklisted(qname, testvalue, valuetype, checkip):
+             # Check if IPv4 is whitelisted
+             ipcheck = check_ip(qname, valuetype, testvalue, orgtestvalue, wl_ip4, 'WHITELIST')
+             if ipcheck:
+-                return False, 'BLACK-IPV4', ipcheck
++                return False, 'WHITE-IPV4', ipcheck
+ 
+             else:
+                 # Check if IPv4 is blacklisted
+@@ -1121,7 +1121,7 @@ def check_blacklisted(qname, testvalue, valuetype, checkip):
+                     if rcheck:
+                         return False, 'WHITE-REV-DOM', rcheck
+                     else:
+-                        return True, 'WHITE-IPV4', ipcheck
++                        return True, 'BLACK-IPV4', ipcheck
+ 
+ 
+         # Check against IP6
+@@ -1130,7 +1130,7 @@ def check_blacklisted(qname, testvalue, valuetype, checkip):
+             # Check if IPv6 is whitelisted
+             ipcheck = check_ip(qname, valuetype, testvalue, orgtestvalue, wl_ip6, 'WHITELIST')
+             if ipcheck:
+-                return False, 'BLACK-IPV6', ipcheck
++                return False, 'WHITE-IPV6', ipcheck
+ 
+             else:
+                 # Check if IPv6 is blacklisted
+@@ -1339,7 +1339,7 @@ def check_geo(qname, valuetype, testvalue, geolst, listname):
+     if giploc:
+         # !!! Make nicer/quicker
+         if continent in geolst or 'CONTINENT:{0}'.format(continent) in geolst:
+-            if config['log_hits'] and config['log_verbose'] and istname:
++            if config['log_hits'] and config['log_verbose'] and listname:
+                 logging.warning('{0}-GEO-CONTINENT-HIT [{1}]: {2} -> {3} -> {4} ({5})'.format(valuetype, listname, qname, testvalue, continent, giploc))
+             return continent
+ 
+@@ -1565,8 +1565,25 @@ def rrrr(response):
+     return (response[0], new_answer, response[2], response[3], response[4])
+ 
+ 
+-def geosteer(qname, answer):
+-    if config['geo_steer'] and answer:
++def geonames(geoname):
++    geol = list('////{0}'.format(geoname).split('/')[-4:])
++    if geol[0]: geol[0] = 'CITY:{0}'.format(geol[0])
++    if geol[1]: geol[1] = 'AREA:{0}'.format(geol[1])
++    if geol[2]: geol[2] = 'COUNTRY:{0}'.format(geol[2])
++    if geol[3]: geol[3] = 'CONTINENT:{0}'.format(geol[3])
++    return list(filter(None, geol))
++
++   
++def geosteer(cip, qname, answer):
++    if config['geo_steer'] and is_ip.search(cip) and answer:
++        steerlist=geonames(geo(cip))
++        if is_ip4.search(cip) and config['override_ecs_ip4']:
++            steerlist=geonames(geo(config['override_ecs_ip4']))
++        elif is_ip6.search(cip) and config['override_ecs_ip6']:
++            steerlist=geonames(geo(config['override_ecs_ip6']))
++
++        logging.info('GEO-STEER: {0} using {1}'.format(cip, ', '.join(steerlist)))
++        
+         new_answer = []
+         for rrset in answer:
+             rrname = str(rrset.name)
+@@ -1577,7 +1594,7 @@ def geosteer(qname, answer):
+             geodata = set()
+             if rrset.rdtype in (1, 28) and len(rrdatalist) > 1:
+                 for ip in rrdatalist:
+-                    geoname = check_geo(qname, 'IP', ip, config['geo_steer'], 'GEOSTEER')
++                    geoname = check_geo(qname, 'IP', ip, steerlist, 'GEOSTEER')
+                     if geoname:
+                         #logging.info('GEO-STEER: {0}/{1} = {2} (~ {3})'.format(rrname, rdtypet, ip, geoname))
+                         newrrdata.append(ip)
+@@ -2265,7 +2282,7 @@ def dns_query(name, rdclass, rdtype, qid, cip, unfilter, fttl):
+             rv = update_ttls(qid, qname, rv, ttl)
+ 
+             # Geo-Steer
+-            rv = (rv[0], geosteer(qname, rv[1]), rv[2], rv[3], returnstatus)
++            rv = (rv[0], geosteer(cip, qname, rv[1]), rv[2], rv[3], returnstatus)
+ 
+             # Cache it
+             if config['log_caching']:

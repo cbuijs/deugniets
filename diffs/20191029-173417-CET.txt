@@ -1,0 +1,120 @@
+diff --git a/deugniets.conf b/deugniets.conf
+index e891043..d1247e4 100644
+--- a/deugniets.conf
++++ b/deugniets.conf
+@@ -15,7 +15,10 @@ port = 53001
+ #nameservers = ["https://cloudflare-dns.com/dns-query"]
+ #nameservers = ["https://cloudflare-dns.com/dns-query", "dns://1.1.1.1", "dns://1.0.0.1"]
+ #nameservers = ["https://dns.google/dns-query"]
+-#nameservers = ["https://dns10.quad9.net/dns-query"]
++
++#nameservers = ["https://dns.quad9.net/dns-query"]
++#bootstrap = ["9.9.9.9", "149.112.112.112", "2620:fe::9", "2620:fe::fe"]
++
+ #nameservers = ["https://dns.quad9.net/dns-query"]
+ #nameservers = ["https://doh.powerdns.org"]
+ #nameservers = ["https://dns.nextdns.io/65fef9/https-nuc"]
+diff --git a/deugniets.py b/deugniets.py
+index 59e43f4..b35330d 100644
+--- a/deugniets.py
++++ b/deugniets.py
+@@ -1,7 +1,7 @@
+ #!/usr/bin/env python3
+ '''
+ =======================================================================
+- deugniets.py v2.39-20191027 Copyright 2019 by cbuijs@chrisbuijs.com
++ deugniets.py v2.397-20191029 Copyright 2019 by cbuijs@chrisbuijs.com
+ =======================================================================
+ 
+  Based on: https://github.com/supriyo-biswas/adblock-dns-server
+@@ -70,6 +70,7 @@ import requests
+ 
+ # Use module PyTricia for CIDR/Subnet stuff
+ import pytricia
++import netaddr
+ 
+ # IPy IP
+ from IPy import IP
+@@ -304,7 +305,6 @@ def unip(iplist1, iplist2, ip6, listname, allowsame):
+ 
+     return iplist1
+         
+-
+ # Aggregate IP list
+ def agg_ip(iplist, listname, fam):
+     logging.info('AGGREGATE-{0}-[{1}]: Aggregating List ...'.format(fam, listname))
+@@ -314,14 +314,19 @@ def agg_ip(iplist, listname, fam):
+     else:
+         new = pytricia.PyTricia(128)
+ 
+-    lastip = 'None'
+-
+-    for ip in iplist:
+-        if iplist.get_key(ip) == ip and (not ip in new):
+-            new[ip] = iplist[ip]
+-            lastip = ip
+-        else:
+-            logging.info('AGGREGATE-{0}-[{1}]: Removed {2} due to parent {3}'.format(fam, listname, ip, lastip))
++    for ip in netaddr.cidr_merge(list(iplist)):
++        ip = str(ip)
++        new[ip] = True
++        if ip not in iplist:
++            logging.info('AGGREGATE-{0}-[{1}]: Removed {2} due to summarization'.format(fam, listname, ip))
++           
++    #lastip = 'None'
++    #for ip in iplist:
++    #    if iplist.get_key(ip) == ip and (not ip in new):
++    #        new[ip] = iplist[ip]
++    #        lastip = ip
++    #    else:
++    #        logging.info('AGGREGATE-{0}-[{1}]: Removed {2} due to parent {3}'.format(fam, listname, ip, lastip))
+ 
+     beforecount = len(iplist)
+     aftercount = len(new)
+@@ -1138,8 +1143,8 @@ def dns_query(name, rdclass, rdtype, qid, cip, unfilter, fttl):
+     cachename = qname + '/IN/' + qrdtype
+ 
+     if unfilter:
+-        #cachename = qname + '/UNFILTERED'
+-        cachename = qname + '/' + str(cip)
++        #cachename = cachename + '/UNFILTERED'
++        cachename = cachename + '/' + str(cip)
+ 
+     rv = None
+     returnstatus = 'OK'
+@@ -1281,7 +1286,8 @@ def dns_query(name, rdclass, rdtype, qid, cip, unfilter, fttl):
+             if config['log_hits']:
+                  logging.warning('REQUEST-IPV6-HIT [{0}]: {1}'.format(qid, cachename))
+ 
+-            rv = (dns.rcode.NOERROR, [], [], []) # Workaround for searchdomains
++            #rv = (dns.rcode.NOERROR, [], [], []) # Workaround for searchdomains
++            rv = (config['blacklist_rcode'], [], [], [])
+ 
+         if rv is None and qrdtype in ('A', 'AAAA', 'CNAME'):
+             match = check_dom('NAME', qname, alias, 'ALIAS', False, False)
+@@ -1824,6 +1830,7 @@ def handle_query(raw_data, client_ip):
+         logging.error('REQUEST-ERROR: Query from {0} - {1}'.format(client_ip, e))
+         return
+ 
++    # Need IPy.IP for octal conversion to real IP
+     if config['use_ecs_ip'] and hasattr(query, 'options'):
+         for opt in query.options:
+             if hasattr(opt, 'ip') and hasattr(opt, 'mask'):
+@@ -2070,7 +2077,7 @@ if __name__ == '__main__':
+ 
+     # Nameservers to forward to
+     config['nameservers'] = ['9.9.9.9', '149.112.112.112']
+-    config['bootstrap'] = config['nameservers']
++    config['bootstrap'] = False
+     config['safe_nameservers'] = False
+ 
+     # Cache Settings
+@@ -2086,7 +2093,7 @@ if __name__ == '__main__':
+     config['use_ecs_ip'] = True
+ 
+     # Random RoundRobin
+-    config['roundrobin'] = True
++    config['roundrobin'] = False
+     config['randomroundrobin'] = False
+ 
+     # CNAME Collapse

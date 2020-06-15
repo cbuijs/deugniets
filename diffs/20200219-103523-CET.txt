@@ -1,0 +1,220 @@
+diff --git a/deugniets.py b/deugniets.py
+index d9f3aa8..ace5241 100644
+--- a/deugniets.py
++++ b/deugniets.py
+@@ -1,7 +1,7 @@
+ #!/usr/bin/env python3
+ '''
+ ===========================================================================
+- deugniets.py v2.721-20200219 Copyright 2019-2020 by cbuijs@chrisbuijs.com
++ deugniets.py v2.722-20200219 Copyright 2019-2020 by cbuijs@chrisbuijs.com
+ ===========================================================================
+ 
+  Based on: https://github.com/supriyo-biswas/adblock-dns-server
+@@ -226,13 +226,12 @@ socket.getaddrinfo = _getaddrinfo
+ 
+ def setup_nameservers():
+     '''Setup NameServers to Forward to'''
+-    if 'nameservers' in config:
+-        dns.resolver.default_resolver = dns.resolver.Resolver(configure=False)
+-        dns.resolver.default_resolver.nameservers = ['9.9.9.9', '149.112.112.112', '2620:fe::9', '2620:fe::fe:9']
+-        dns.resolver.default_resolver.port = 53
+-        dns.resolver.default_resolver.use_edns(0, 0, 1220) # DNSFLag Day 2020 advice. 1220:ipv6, 1480:ipv4
+-        dns.resolver.default_resolver.timeout = 3
+-        dns.resolver.default_resolver.lifetime = 15
++    dns.resolver.default_resolver = dns.resolver.Resolver(configure=False)
++    dns.resolver.default_resolver.nameservers = ['9.9.9.9', '149.112.112.112', '2620:fe::9', '2620:fe::fe:9']
++    dns.resolver.default_resolver.port = 53
++    dns.resolver.default_resolver.use_edns(0, 0, 1220) # DNSFLag Day 2020 advice. 1220:ipv6, 1480:ipv4
++    dns.resolver.default_resolver.timeout = 3
++    dns.resolver.default_resolver.lifetime = 15
+ 
+ 
+ def get_config(config, conffile):
+@@ -611,10 +610,9 @@ def roundrobin(lst):
+         else:
+             r = 1
+ 
+-        #return lst[1:] + lst[:1]
+         return list(filter(None, lst[r:] + lst[:r]))
+ 
+-    return lst
++    return list(lst)
+ 
+ 
+ # convert to in-addr/ip6.arpa
+@@ -816,7 +814,7 @@ def check_blacklisted(value, testvalue, valuetype, checkip):
+         if config['log_hits']:
+             logging.warning('{0}-IPV4-HIT: {1}'.format(valuetype, testvalue))
+         return True
+-    elif config['blockip6'] and ((notip and ip6arpa.seach(testvalue)) or (check_ip and is_ip6.search(testvalue))):
++    elif config['blockip6'] and ((notip and ip6arpa.search(testvalue)) or (check_ip and is_ip6.search(testvalue))):
+         if config['log_hits']:
+              logging.warning('{0}-IPV6-HIT: {1}'.format(valuetype, testvalue))
+         return True
+@@ -1360,9 +1358,12 @@ def dns_query(name, rdclass, rdtype, qid, cip, unfilter, fttl):
+ 
+     cachename = '{0}/IN/{1}'.format(qname, qrdtype)
+ 
+-    if is_ip.seach(cip) and cip not in private4 and cip not in private6:
++    if is_ip.search(cip) and cip not in private4 and cip not in private6:
+         cachename = '{0}/PUBLIC'.format(cachename)
+ 
++    if cip == 'SPOOFER':
++        unfilter = True
++
+     if unfilter:
+         cachename = '{0}/{1}'.format(cachename, cip)
+ 
+@@ -1530,80 +1531,91 @@ def dns_query(name, rdclass, rdtype, qid, cip, unfilter, fttl):
+             #rv = (dns.rcode.NOERROR, [], [], []) # Workaround for searchdomains
+             rv = (config['blacklist_rcode'], [], [], [])
+ 
+-        if rv is None and qrdtype in ('A', 'AAAA', 'CNAME') and (cip in private4 or cip in private6):
++        if rv is None and (qrdtype in ('A', 'AAAA', 'CNAME')) and (cip in private4 or cip in private6):
+             match = check_dom('NAME', qname, alias, 'ALIAS', False, False)
+             if match:
+                 spoof = alias[match]
+-                if spoof != qname and (qname not in beingspoofed) and (not check_dom('NAME', qname, beingspoofed, 'SPOOFER-CHECKER', False, False)):
+-                    beingspoofed.add(qname)
+-
+-                    if config['log_responses']:
+-                        logging.warning('SPOOFING-HIT [{0}]: \"{1}\" -> \"{2}\"'.format(qid, qname, ', '.join(spoof.split(','))))
+-
+-                    if is_rc.search(spoof):
+-                        if spoof in ('NODATA', 'NOERROR'):
+-                            rv = (dns.rcode.NOERROR, [], [], [])
+-                        elif spoof == 'NXDOMAIN':
+-                            rv = (dns.rcode.NXDOMAIN, [], [], [])
+-                        elif spoof == 'REFUSED':
+-                            rv = (dns.rcode.REFUSED, [], [], [])
+-                        elif spoof == 'SERVFAIL':
+-                            rv = (dns.rcode.SERVFAIL, [], [], [])
+-                        elif spoof == 'RANDOM':
+-                            if qrdtype != 'CNAME':
+-                                addrs = list()
+-                                for i in range(0, random.randint(0, 8)):
+-                                    if qrdtype == 'A':
+-                                        addrs.append(str(random.randint(0, 255)) + '.' + str(random.randint(0, 255)) + '.' + str(random.randint(0, 255)) + '.' + str(random.randint(0, 255)))
+-                                    elif qrdtype == 'AAAA':
+-                                        addrs.append(':'.join(filter(None, regex.split('(.{4,4})', ''.join([random.choice('0123456789abcdef') for _ in range(32)])))))
++                if spoof != qname:
++                    count = 0
++                    while count < config['retry_count'] and (qname in beingspoofed or check_dom('NAME', qname, beingspoofed, 'SPOOFER-CHECKER', False, False)):
++                        count += 1
++                        logging.debug('SPOOF-SLEEP: {0} (#{1})'.format(qname, count))
++                        time.sleep(config['retry_wait'])
+ 
+-                                if addrs:
+-                                    rv = (dns.rcode.NOERROR, [dns.rrset.from_text_list(qname, config['spoof_ttl'], 'IN', rdtype, addrs)], [], [])
+-
+-                    elif is_dom.search(spoof):
+-                        rcode = False
+-                        qresponse = False
+-                        spoof = make_dom(spoof)
+-                        rcode, qresponse = dns_query(spoof, 1, rdtype, random.randint(1025, 65535), 'SPOOFER', False, False)[0:2]
+-
+-                        if rcode == dns.rcode.NOERROR and qresponse:
+-                            qresponse.insert(0, dns.rrset.from_text(qname, config['spoof_ttl'], 'IN', 5, spoof)) # IN/CNAME
+-                            qresponse = collapse(qname, qresponse, qid)
+-                            rv = (dns.rcode.NOERROR, qresponse, [], [])
+-                            spoof = 'ALIAS'
+-                        elif rcode:
+-                            rv = (rcode, [], [], [])
+-                            spoof = 'ALIAS-' + dns.rcode.to_text(rcode) + '.' + spoof
++                    if count >= config['retry_count']:
++                        logging.error('SPOOF-FAIL: {0} - Took to long to check'.format(qname))
++                        rv = (dns.rcode.SERVFAIL, [], [], [])
+ 
+                     else:
+-                        if qrdtype == 'A':
+-                            addrs = filter(is_ip4.search, spoof.split(','))
+-                            if addrs:
+-                                rv = (dns.rcode.NOERROR, [dns.rrset.from_text_list(qname, config['spoof_ttl'], 'IN', 1, addrs)], [], []) # IN/A
+-                        elif qrdtype == 'AAAA':
+-                            addrs = filter(is_ip6.search, spoof.split(','))
+-                            if addrs:
+-                                rv = (dns.rcode.NOERROR, [dns.rrset.from_text_list(qname, config['spoof_ttl'], 'IN', 28, addrs)], [], []) # IN/AAAA
+-                        spoof = 'REDIRECT' # Keep logging clean
+-
+-                    if rv is not None:
+-                        returnstatus = 'SPOOFED'
+-                        soa = dns.rrset.from_text(match, config['spoof_ttl'], 'IN', 6, "spoofed.{0} {1}.{2}. 1 60 60 60 60".format(qname, qrdtype.lower(), spoof.rstrip('.').lower()))
+-                        rv = (rv[0], rv[1], [soa], rv[3])
++                        beingspoofed.add(qname)
+ 
+-                    else:
+-                        if config['log_requests']:
+-                            logging.info('SPOOFING [{0}]: NO spoof-results for \"{1}\"'.format(qid, qname))
++                        if config['log_responses']:
++                            logging.warning('SPOOFING-HIT [{0}]: \"{1}\" -> \"{2}\"'.format(qid, qname, ', '.join(spoof.split(','))))
++
++                        if is_rc.search(spoof):
++                            if spoof in ('NODATA', 'NOERROR'):
++                                rv = (dns.rcode.NOERROR, [], [], [])
++                            elif spoof == 'NXDOMAIN':
++                                rv = (dns.rcode.NXDOMAIN, [], [], [])
++                            elif spoof == 'REFUSED':
++                                rv = (dns.rcode.REFUSED, [], [], [])
++                            elif spoof == 'SERVFAIL':
++                                rv = (dns.rcode.SERVFAIL, [], [], [])
++                            elif spoof == 'RANDOM':
++                                if qrdtype != 'CNAME':
++                                    addrs = list()
++                                    for i in range(0, random.randint(0, 8)):
++                                        if qrdtype == 'A':
++                                            addrs.append(str(random.randint(0, 255)) + '.' + str(random.randint(0, 255)) + '.' + str(random.randint(0, 255)) + '.' + str(random.randint(0, 255)))
++                                        elif qrdtype == 'AAAA':
++                                            addrs.append(':'.join(filter(None, regex.split('(.{4,4})', ''.join([random.choice('0123456789abcdef') for _ in range(32)])))))
++
++                                    if addrs:
++                                        rv = (dns.rcode.NOERROR, [dns.rrset.from_text_list(qname, config['spoof_ttl'], 'IN', rdtype, addrs)], [], [])
++
++                        elif is_dom.search(spoof):
++                            rcode = False
++                            qresponse = False
++                            spoof = make_dom(spoof)
++                            rcode, qresponse = dns_query(spoof, 1, rdtype, random.randint(1025, 65535), 'SPOOFER', False, False)[0:2]
++
++                            if rcode == dns.rcode.NOERROR and qresponse:
++                                qresponse.insert(0, dns.rrset.from_text(qname, config['spoof_ttl'], 'IN', 5, spoof)) # IN/CNAME
++                                qresponse = collapse(qname, qresponse, qid)
++                                rv = (dns.rcode.NOERROR, qresponse, [], [])
++                                spoof = 'ALIAS'
++                            elif rcode:
++                                rv = (rcode, [], [], [])
++                                spoof = 'ALIAS-' + dns.rcode.to_text(rcode) + '.' + spoof
++
++                        else:
++                            if qrdtype == 'A':
++                                addrs = filter(is_ip4.search, spoof.split(','))
++                                if addrs:
++                                    rv = (dns.rcode.NOERROR, [dns.rrset.from_text_list(qname, config['spoof_ttl'], 'IN', 1, addrs)], [], []) # IN/A
++                            elif qrdtype == 'AAAA':
++                                addrs = filter(is_ip6.search, spoof.split(','))
++                                if addrs:
++                                    rv = (dns.rcode.NOERROR, [dns.rrset.from_text_list(qname, config['spoof_ttl'], 'IN', 28, addrs)], [], []) # IN/AAAA
++                            spoof = 'REDIRECT' # Keep logging clean
++
++                        if rv is not None:
++                            returnstatus = 'SPOOFED'
++                            soa = dns.rrset.from_text(match, config['spoof_ttl'], 'IN', 6, "spoofed.{0} {1}.{2}. 1 60 60 60 60".format(qname, qrdtype.lower(), spoof.rstrip('.').lower()))
++                            rv = (rv[0], rv[1], [soa], rv[3])
++
++                        else:
++                            if config['log_requests']:
++                                logging.info('SPOOFING [{0}]: NO spoof-results for \"{1}\"'.format(qid, qname))
+ 
+-                    beingspoofed.discard(qname)
++                        beingspoofed.discard(qname)
+ 
+                 else:
+                     logging.debug('NO-SPOOF [{0}]: Same or Sub-Domain for \"{1}\" -> \"{2}\"'.format(qid, qname, spoof))
+ 
+ 
++    addrs = False
+     if rv is None:
+-        addrs = False
+         fwdtag = 'GLOBAL'
+ 
+         ### !!! TODO: add PORT as option, default 53

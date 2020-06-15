@@ -1,0 +1,23 @@
+diff --git a/deugniets.py b/deugniets.py
+index 932f162..da755cf 100644
+--- a/deugniets.py
++++ b/deugniets.py
+@@ -1,7 +1,7 @@
+ #!/usr/bin/env python3
+ '''
+ ===========================================================================
+- deugniets.py v2.964-20200504 Copyright 2019-2020 by cbuijs@chrisbuijs.com
++ deugniets.py v2.965-20200504 Copyright 2019-2020 by cbuijs@chrisbuijs.com
+ ===========================================================================
+ 
+  Based on: https://github.com/supriyo-biswas/adblock-dns-server
+@@ -2440,7 +2440,8 @@ def log_helper(qname, qrdtype, result, tag, qid, cip):
+     elif result[2]:
+         ttl = result[2][-1].ttl
+  
+-    rlog = '{0} [{1}]: {2}/IN/{3} {4} = {5} (ANS: {6}, AUT: {7}, ADD: {8} RRs)'.format(tag, qid, qname, qrdtype, ttl, rcode, len(result[1]), len(result[2]), len(result[3]))
++    #rlog = '{0} [{1}]: {2}/IN/{3} {4} = {5} (ANS: {6}, AUT: {7}, ADD: {8} RRs)'.format(tag, qid, qname, qrdtype, ttl, rcode, len(result[1]), len(result[2]), len(result[3]))
++    rlog = '{0} [{1}]: {2}/IN/{3} {4} = {5} ({6} RRs)'.format(tag, qid, qname, qrdtype, ttl, rcode, countrv(result))
+     if cip:
+         rlog = '{0} to {1}'.format(rlog, cip)
+ 

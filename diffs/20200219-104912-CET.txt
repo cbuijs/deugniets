@@ -1,0 +1,26 @@
+diff --git a/Dockerfile b/Dockerfile
+index 8ed4a2c..d4f3149 100644
+--- a/Dockerfile
++++ b/Dockerfile
+@@ -12,7 +12,6 @@ ADD cache.py /opt/deugniets/cache.py
+ ADD requirements.txt /opt/deugniets/requirements.txt
+ ADD deugniets.conf.docker /opt/deugniets/deugniets.conf
+ ADD local.list.docker /opt/deugniets/local.list
+-ADD /usr/share/GeoIP/GeoLite2-City.mmdb /usr/share/GeoIP/GeoLite2-City.mmdb
+ RUN pip3 install --upgrade pip
+ RUN pip3 install --upgrade chardet==3.0.4
+ RUN pip3 install --upgrade urllib3==1.25.7
+diff --git a/deugniets.py b/deugniets.py
+index 7070b58..87ca131 100644
+--- a/deugniets.py
++++ b/deugniets.py
+@@ -2558,7 +2558,8 @@ if __name__ == '__main__':
+     config['abuseipdbkey'] = False
+ 
+     # GeoIP DB
+-    config['geodb'] = '/usr/share/GeoIP/GeoLite2-City.mmdb'
++    #config['geodb'] = '/usr/share/GeoIP/GeoLite2-City.mmdb'
++    config['geodb'] = False
+ 
+     # Cache Settings
+     config['blacklist_cache_ttl'] = 60

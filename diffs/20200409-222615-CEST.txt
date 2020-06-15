@@ -1,0 +1,430 @@
+diff --git a/deugniets.py b/deugniets.py
+index 8d5862d..436ccd4 100644
+--- a/deugniets.py
++++ b/deugniets.py
+@@ -1,7 +1,7 @@
+ #!/usr/bin/env python3
+ '''
+ ===========================================================================
+- deugniets.py v2.796-20200406 Copyright 2019-2020 by cbuijs@chrisbuijs.com
++ deugniets.py v2.8-20200409 Copyright 2019-2020 by cbuijs@chrisbuijs.com
+ ===========================================================================
+ 
+  Based on: https://github.com/supriyo-biswas/adblock-dns-server
+@@ -419,116 +419,160 @@ def encode_0x20(st):
+     return st.lower()
+ 
+ 
++def cleansplit(s):
++    return regex.split('\s*#\s*', s)[0].strip().rstrip('!')
++
++
+ def read_list(filenames, listname, domlst, ip4lst, ip6lst, rxlst, unlst, unip4, unip6, geolst):
+     '''Get lists from either file or URL'''
+     for filename in filenames:
+ 
++        logging.info('PROCESS-LIST: {0} ...'.format(filename))
++
++        ftype = False
++        if filename.find(':') > 0:
++            ft = filename.split(':')[0].upper()
++            filename = filename.split(':')[1]
++            if ft in ('IP', 'DOM', 'DOMWORD', 'GEO', 'ALIAS', 'FORWARD', 'TTL', 'UNFILTER', 'RX'):
++                ftype = ft
++                logging.info('PROCESS-LIST ({0}): {1}-LIST ...'.format(filename, ftype))
++        else:
++                logging.info('PROCESS-LIST ({0}): GENERIC-LIST ...'.format(filename))
++          
++
+         lname = '{0}:{1}'.format(listname, filename)
+         lines = get_lines(filename, listname)
+ 
+         if lines:
+-            cleanlines = set()
+-            for line in list(filter(None, lines)):
+-                cleanline = regex.split('\s*#\s*', line)[0].strip().rstrip('!') # Strip comments and line-feeds
+-                if cleanline and cleanline not in cleanlines:
+-                    cleanlines.add(cleanline)
++            if ftype:
++                cleanlines = lines
++            else:
++                logging.info('PROCESS-LIST ({0}): Clean-up of {1} lines ...'.format(lname, len(lines)))
++                cleanlines = set(map(cleansplit, lines))
++
++            #cleanlines = set()
++            #for line in list(filter(None, lines)):
++            #    cleanline = regex.split('\s*#\s*', line)[0].strip().rstrip('!') # Strip comments and line-feeds
++            #    if cleanline and cleanline not in cleanlines:
++            #        cleanlines.add(cleanline)
+ 
+             logging.info('PROCESS-LIST ({0}): Processing {1} lines (out of {2}) ...'.format(lname, len(cleanlines), len(lines)))
+ 
+             oldtotal = len(domlst) + len(ip4lst) + len(ip6lst) + len(rxlst) + len(unlst) + len(unip4) + len(unip6) + len(geolst) + len(alias) + len(forwarder) + len(forcettl)
++            
++            if ftype is False or ftype == 'IP':
++                logging.info('PROCESS-LIST ({0}): Getting IPs...'.format(lname))
++                for entry in list(filter(None, filter(is_ip4.search, cleanlines))):
++                    ip4lst[entry] = entry
++
++                for entry in list(filter(None, filter(is_ip6.search, cleanlines))):
++                    ip6lst[addzero(entry)] = entry
++
++            if ftype is False or ftype == 'DOM':
++                logging.info('PROCESS-LIST ({0}): Getting DOMAINs...'.format(lname))
++                domlst.update(dict.fromkeys(list(map(make_dom, filter(None, filter(is_dom.search, cleanlines)))), 'Domain'))
++
++            if ftype is False or ftype == 'DOMWORD':
++                logging.info('PROCESS-LIST ({0}): Getting DOMWORDs...'.format(lname))
++                for entry in list(filter(None, filter(is_domword.search, cleanlines))):
++                    try:
++                        domwordrx = '^(.*[\.\-])*{0}([\.\-].*)*$'.format(entry.lstrip('*'))
++                        rxlst[domwordrx] = regex.compile(domwordrx, regex.I)
++                        logging.info('DOMWORD: {0} -> {1}'.format(entry, domwordrx))
++                    except BaseException as err:
++                        logging.warning('LIST [{0}]: Invalid Syntax: \"{1}\" - {2}'.format(lname, entry, err))
+ 
+-            for entry in list(filter(None, filter(is_ip4.search, cleanlines))):
+-                ip4lst[entry] = entry
+-
+-            for entry in list(filter(None, filter(is_ip6.search, cleanlines))):
+-                ip6lst[addzero(entry)] = entry
+-
+-            #for entry in list(filter(None, filter(is_dom.search, cleanlines))):
+-            #    domlst[make_dom(entry)] = entry
+-            domlst.update(dict.fromkeys(list(map(make_dom, filter(None, filter(is_dom.search, cleanlines)))), 'Domain'))
+-
+-            for entry in list(filter(None, filter(is_domword.search, cleanlines))):
+-                try:
+-                    domwordrx = '^(.*[\.\-])*{0}([\.\-].*)*$'.format(entry.lstrip('*'))
+-                    rxlst[domwordrx] = regex.compile(domwordrx, regex.I)
+-                    logging.info('DOMWORD: {0} -> {1}'.format(entry, domwordrx))
+-                except BaseException as err:
+-                    logging.warning('LIST [{0}]: Invalid Syntax: \"{1}\" - {2}'.format(lname, entry, err))
+-
+-            for entry in list(filter(None, filter(is_geo.search, cleanlines))):
+-                #entry = entry.lstrip('@')
+-                geolst[regex.sub('[^a-zA-Z0-9]+', '', entry.upper())] = entry
+-
+-            for entry in list(filter(None, filter(is_alias.search, cleanlines))):
+-                datatype = False
+-                domain, value = get_value(entry, '=', is_rc.search, False)
+-                if value is False:
+-                    domain, value = get_value(entry, '=', is_ip4.search, False)
+-                    domain, value = get_value(entry, '=', is_ip6.search, value)
++            if ftype is False or ftype == 'GEO':
++                logging.info('PROCESS-LIST ({0}): Getting GEOs...'.format(lname))
++                for entry in list(filter(None, filter(is_geo.search, cleanlines))):
++                    #entry = entry.lstrip('@')
++                    geolst[regex.sub('[^a-zA-Z0-9]+', '', entry.upper())] = entry
++
++            if ftype is False or ftype == 'ALIAS':
++                logging.info('PROCESS-LIST ({0}): Getting ALIASes...'.format(lname))
++                for entry in list(filter(None, filter(is_alias.search, cleanlines))):
++                    datatype = False
++                    domain, value = get_value(entry, '=', is_rc.search, False)
+                     if value is False:
+-                        domain, value = get_value(entry, '=', is_dom.search, False)
++                        domain, value = get_value(entry, '=', is_ip4.search, False)
++                        domain, value = get_value(entry, '=', is_ip6.search, value)
++                        if value is False:
++                            domain, value = get_value(entry, '=', is_dom.search, False)
+ 
+-                    if value:
+-                        value = value.lower()
+-                else:
+-                    value = value.upper()
++                        if value:
++                            value = value.lower()
++                    else:
++                        value = value.upper()
+ 
+-                if domain and value:
+-                    domain = make_dom(domain)
+-                    logging.debug('SPOOF: {0} redirect to {1}'.format(domain, ', '.join(value.split(','))))
+-                    alias[domain] = value
+-                else:
+-                    logging.warning('LIST [{0}]: Invalid ALIAS Syntax: \"{1}\"'.format(lname, entry))
+-
+-            for entry in list(filter(None, filter(is_forwarder.search, cleanlines))):
+-                domain, value = get_value(entry, '>', is_ip.search, False)
+-                if domain and value:
+-                    domain = make_dom(domain)
+-                    logging.debug('FORWARDER: {0} forward to {1}'.format(domain, ', '.join(value.lower().split(','))))
+-                    forwarder[domain] = value.lower()
+-                else:
+-                    logging.warning('LIST [{0}]: Invalid FORWARDER Syntax: \"{1}\"'.format(lname, entry))
+-
+-            for entry in list(filter(None, filter(is_ttl.search, cleanlines))):
+-                domain, value = get_value(entry, '!', None, False)
+-                if domain and value:
+-                    domain = make_dom(domain)
+-                    logging.debug('TTL: {0} = {1}'.format(domain, value))
+-                    forcettl[domain] = int(value)
+-                else:
+-                    logging.warning('LIST [{0}]: Invalid TTL Syntax: \"{1}\"'.format(lname, entry))
++                    if domain and value:
++                        domain = make_dom(domain)
++                        logging.debug('SPOOF: {0} redirect to {1}'.format(domain, ', '.join(value.split(','))))
++                        alias[domain] = value
++                    else:
++                        logging.warning('LIST [{0}]: Invalid ALIAS Syntax: \"{1}\"'.format(lname, entry))
++
++            if ftype is False or ftype == 'FORWARD':
++                logging.info('PROCESS-LIST ({0}): Getting FORWARDers...'.format(lname))
++                for entry in list(filter(None, filter(is_forwarder.search, cleanlines))):
++                    domain, value = get_value(entry, '>', is_ip.search, False)
++                    if domain and value:
++                        domain = make_dom(domain)
++                        logging.debug('FORWARDER: {0} forward to {1}'.format(domain, ', '.join(value.lower().split(','))))
++                        forwarder[domain] = value.lower()
++                    else:
++                        logging.warning('LIST [{0}]: Invalid FORWARDER Syntax: \"{1}\"'.format(lname, entry))
++
++            if ftype is False or ftype == 'TTL':
++                logging.info('PROCESS-LIST ({0}): Getting TTLs...'.format(lname))
++                for entry in list(filter(None, filter(is_ttl.search, cleanlines))):
++                    domain, value = get_value(entry, '!', None, False)
++                    if domain and value:
++                        domain = make_dom(domain)
++                        logging.debug('TTL: {0} = {1}'.format(domain, value))
++                        forcettl[domain] = int(value)
++                    else:
++                        logging.warning('LIST [{0}]: Invalid TTL Syntax: \"{1}\"'.format(lname, entry))
++
++
++            if ftype is False or ftype == 'UNFILTER':
++                logging.info('PROCESS-LIST ({0}): Getting UNFILTERs...'.format(lname))
++                for entry in list(filter(None, filter(is_unfilter.search, cleanlines))):
++                    domip = entry.lstrip('+')
++                    if is_dom.search(domip):
++                        logging.debug('UNFILTER-DOM: {0}'.format('{0}.'.format(domip.strip('.').lower())))
++                        unlst[make_dom(domip)] = entry
++
++                    elif is_ip4.search(domip):
++                        logging.debug('UNFILTER-IPV4: {0}'.format(domip))
++                        try:
++                            unip4[domip] = entry
++                        except BaseException as err:
++                            logging.warning('LIST [{0}]: Invalid Syntax: \"{1}\" - {2}'.format(lname, entry, err))
++
++                    elif is_ip6.search(domip):
++                        logging.debug('UNFILTER-IPV6: {0}'.format(domip))
++                        try:
++                            unip6[domip] = entry
++                        except BaseException as err:
++                            logging.warning('LIST [{0}]: Invalid Syntax: \"{1}\" - {2}'.format(lname, entry, err))
+ 
+-            for entry in list(filter(None, filter(is_unfilter.search, cleanlines))):
+-                domip = entry.lstrip('+')
+-                if is_dom.search(domip):
+-                    logging.debug('UNFILTER-DOM: {0}'.format('{0}.'.format(domip.strip('.').lower())))
+-                    unlst[make_dom(domip)] = entry
++                    else:
++                        logging.warning('LIST [{0}]: Invalid UnFilter Syntax: \"{1}\"'.format(lname, entry))
+ 
+-                elif is_ip4.search(domip):
+-                    logging.debug('UNFILTER-IPV4: {0}'.format(domip))
+-                    try:
+-                        unip4[domip] = entry
+-                    except BaseException as err:
+-                        logging.warning('LIST [{0}]: Invalid Syntax: \"{1}\" - {2}'.format(lname, entry, err))
+ 
+-                elif is_ip6.search(domip):
+-                    logging.debug('UNFILTER-IPV6: {0}'.format(domip))
++            if ftype is False or ftype == 'RX':
++                logging.info('PROCESS-LIST ({0}): Getting REGEXes...'.format(lname))
++                clines = cleanlines
++                if ftype is False:
++                    clines = list(filter(None, filter(is_regex.search, cleanlines)))
++                
++                for entry in clines:
++                    entry = entry.strip('/')
+                     try:
+-                        unip6[domip] = entry
++                        rxlst[entry] = regex.compile(entry, regex.I) # To test/validate
+                     except BaseException as err:
+                         logging.warning('LIST [{0}]: Invalid Syntax: \"{1}\" - {2}'.format(lname, entry, err))
+ 
+-                else:
+-                    logging.warning('LIST [{0}]: Invalid UnFilter Syntax: \"{1}\"'.format(lname, entry))
+-
+-
+-            for entry in list(filter(None, filter(is_regex.search, cleanlines))):
+-                entry = entry.strip('/')
+-                try:
+-                    rxlst[entry] = regex.compile(entry, regex.I) # To test/validate
+-                except BaseException as err:
+-                    logging.warning('LIST [{0}]: Invalid Syntax: \"{1}\" - {2}'.format(lname, entry, err))
+-
+ 
+             newtotal = len(domlst) + len(ip4lst) + len(ip6lst) + len(rxlst) + len(unlst) + len(unip4) + len(unip6) + len(geolst) + len(alias) + len(forwarder) + len(forcettl)
+             total = newtotal - oldtotal
+@@ -840,10 +884,13 @@ def check_blacklisted(testvalue, valuetype, checkip):
+     # Check against domain
+     if checkip is False and is_dom.search(testvalue):
+         #logging.debug('CHECK-{0}: \"{1}\" is a DOMAIN'.format(valuetype, testvalue))
++        smatch = None
+         if check_dom(valuetype, testvalue, wl_dom, 'WHITELIST', False, False): # Whitelisted
+-            if config['block_specific'] and testvalue in bl_dom:
+-                logging.warning('SPECIFIC-NAME-DOM-HIT [BLACKLIST]: \"{0}\" -> \"{0}\"'.format(testvalue))
+-                return True
++            if config['block_specific']:
++                smatch = check_dom(valuetype, testvalue, bl_dom, 'BLACKLIST', False, False) # Blacklisted
++                if smatch and testvalue != smatch:
++                    logging.warning('SPECIFIC-NAME-DOM-HIT [BLACKLIST]: \"{0}\" -> \"{0}\"'.format(testvalue))
++                    return True
+ 
+             return False
+ 
+@@ -860,7 +907,7 @@ def check_blacklisted(testvalue, valuetype, checkip):
+                     logging.warning('{0}-NXTLD-HIT: {1}'.format(valuetype, testvalue))
+                 return True
+ 
+-        if check_dom(valuetype, testvalue, bl_dom, 'BLACKLIST', False, config['smartdoms']): # Blacklisted
++        if smatch or check_dom(valuetype, testvalue, bl_dom, 'BLACKLIST', False, config['smartdoms']): # Blacklisted
+             return True
+ 
+         if check_rx(valuetype, orgtestvalue, bl_rx, bl_big_rx, 'BLACKLIST'):
+@@ -1314,7 +1361,8 @@ def dns_query(name, rdclass, rdtype, qid, cip, unfilter, fttl):
+ 
+     if is_ip.search(cip):
+         if check_badip(cip):
+-            return (dns.rcode.REFUSED, [], [], [])
++            soa = dns.rrset.from_text(qname, config['blacklist_ttl'], 'IN', 6, 'blocked.{0}. bad.ip. {1} 60 60 60 60'.format(regex.sub(':', '.', cip), int(time.time())))
++            return (dns.rcode.REFUSED, [], [soa], [])
+ 
+         if cip not in private4 and cip not in private6:
+             cachename = '{0}/PUBLIC'.format(cachename)
+@@ -1336,17 +1384,20 @@ def dns_query(name, rdclass, rdtype, qid, cip, unfilter, fttl):
+     else:
+         if qrdtype == 'ANY' and config['blockany']:
+             logging.warning('BLOCK-ANY-HIT [{0}]: {1}'.format(qid, cachename))
+-            return (dns.rcode.REFUSED, [], [], [])
++            soa = dns.rrset.from_text(qname, config['blacklist_ttl'], 'IN', 6, 'blocked. any. {0} 60 60 60 60'.format(int(time.time())))
++            return (dns.rcode.REFUSED, [], [soa], [])
+ 
+         # Absolete, Experimental or not used
+         # https://www.iana.org/assignments/dns-parameters/dns-parameters.xhtml
+         if qrdtype in ('A6', 'AXFR', 'DLV', 'HINFO', 'IXFR', 'LOC', 'MAILA', 'MAILB', 'MB', 'MF', 'MG', 'MR', 'NONE', 'NULL', 'NXT', 'OPT', 'RP', 'SPF', 'WKS', 'X25'):
+             logging.warning('RRTYPE-NOTIMP-HIT [{0}]: {1} -> {2}'.format(qid, qname, qrdtype))
+-            return (dns.rcode.NOTIMP, [], [], [])
++            soa = dns.rrset.from_text(qname, config['blacklist_ttl'], 'IN', 6, 'blocked.{0}. notimp. {1} 60 60 60 60'.format(qrdtype, int(time.time())))
++            return (dns.rcode.NOTIMP, [], [soa], [])
+ 
+         if is_formerr('REQUEST', qname, qrdtype):
+             #return (dns.rcode.SERVFAIL, [], [], [])
+-            return (dns.rcode.FORMERR, [], [], [])
++            soa = dns.rrset.from_text(qname, config['blacklist_ttl'], 'IN', 6, 'blocked. formerr. {0} 60 60 60 60'.format(int(time.time())))
++            return (dns.rcode.FORMERR, [], [soa], [])
+ 
+     rv = None
+     returnstatus = 'OK'
+@@ -1404,11 +1455,13 @@ def dns_query(name, rdclass, rdtype, qid, cip, unfilter, fttl):
+ 
+             else:
+                 logging.error('COMMAND-UNKNOWN: {0}'.format(command))
+-                return (dns.rcode.REFUSED, [], [], [])
++                soa = dns.rrset.from_text(qname, 0, 'IN', 6, 'refused.command. {0}. {1} 60 60 60 60'.format(command.lower(), int(time.time())))
++                return (dns.rcode.REFUSED, [], [soa], [])
+ 
+         else:
+             logging.error('COMMAND-REFUSED (ACL): {0} from {1}'.format(command, cip))
+-            return (dns.rcode.REFUSED, [], [], [])
++            soa = dns.rrset.from_text(qname, 0, 'IN', 6, 'refused.ip.command. {0}. {1} 60 60 60 60'.format(command.lower(), int(time.time())))
++            return (dns.rcode.REFUSED, [], [soa], [])
+ 
+         logging.info('COMMAND-FINISHED: {0}'.format(command))
+         soa = dns.rrset.from_text(qname, 0, 'IN', 6, 'finished.command. {0}. {1} 60 60 60 60'.format(command.lower(), int(time.time())))
+@@ -1563,7 +1616,7 @@ def dns_query(name, rdclass, rdtype, qid, cip, unfilter, fttl):
+ 
+                             if rcode == dns.rcode.NOERROR and qresponse:
+                                 qresponse.insert(0, dns.rrset.from_text(qname, config['spoof_ttl'], 'IN', 5, spoof)) # IN/CNAME
+-                                qresponse = collapse(qname, qresponse, qid)
++                                #qresponse = collapse(qname, qresponse, qid)
+                                 rv = (dns.rcode.NOERROR, qresponse, [], [])
+                                 spoof = 'ALIAS'
+                             elif rcode:
+@@ -1738,7 +1791,10 @@ def dns_query(name, rdclass, rdtype, qid, cip, unfilter, fttl):
+                     rv = (config['blacklist_rcode'], [], [], [])
+                 else:
+                     response.answer = normttl(qname, response.answer, qid, fttl)
++                    before = len(response.answer)
+                     response.answer = collapse(qname, response.answer, qid)
++                    if len(response.answer) != before:
++                         returnstatus = '{0}-COLLAPSED'.format(returnstatus)
+                     rv = (response.rcode(), response.answer, response.authority, response.additional)
+ 
+ 
+@@ -1885,12 +1941,12 @@ def dox_request(qid, qname, rdtype, cachename, urls, rfc8484, cip):
+             bits = config['ecs_privacy4'] or 24
+ 
+         if config['log_ecs'] and ccip != cip:
+-            logging.info('EDNS-CLIENT-SUBNET-OVERRIDE: {0} -> {1}'.format(cip, ccip))
++            logging.info('EDNS-CLIENT-SUBNET-OVERRIDE [{0}]: {1} -> {2}'.format(qid, cip, ccip))
+ 
+         ocip = IP(ccip).make_net(str(bits)).strNormal(0) # Convert to network with no mask
+ 
+         if config['log_ecs'] and bits not in (32, 128):
+-            logging.info('EDNS-CLIENT-SUBNET-PRIVACY: {0} -> {1}/{2}'.format(ccip, ocip, bits))
++            logging.info('EDNS-CLIENT-SUBNET-PRIVACY [{0}]: {1} -> {2}/{3}'.format(qid, ccip, ocip, bits))
+ 
+         cso = clientsubnetoption.ClientSubnetOption(ocip, bits)
+         message.use_edns(edns=0, ednsflags=0, payload=1220, request_payload=None, options=[cso])
+@@ -1899,14 +1955,13 @@ def dox_request(qid, qname, rdtype, cachename, urls, rfc8484, cip):
+ 
+     af = None
+     aftag = 'Auto-IPv4/6'
+-    if config['smartip']:
+-        if is_ip.search(cip):
+-            if rdtype == dns.rdatatype.A or is_ip4.search(cip) or ip4arpa.search(qname):
+-                af = 2
+-                aftag = 'IPv4'
+-            elif rdtype == dns.rdatatype.AAAA or is_ip6.search(cip) or ip6arpa.search(qname):
+-                af = 10
+-                aftag = 'IPv6'
++    if config['smartip'] and is_ip.search(cip):
++        if rdtype == dns.rdatatype.A or is_ip4.search(cip) or ip4arpa.search(qname):
++            af = 2
++            aftag = 'IPv4'
++        elif rdtype == dns.rdatatype.AAAA or is_ip6.search(cip) or ip6arpa.search(qname):
++            af = 10
++            aftag = 'IPv6'
+ 
+     retries = 0
+     starttime = int(time.time())
+@@ -2142,9 +2197,6 @@ def log_helper(qname, qrdtype, result, tag, qid):
+                 if result[3]:
+                     log_response(qname, qrdtype, result[3], rcode, '{0}-ADDITIONAL'.format(tag), False, qid)
+ 
+-            return True
+-
+-
+     status = 'NORMAL'
+     if len(result) > 4:
+         status = result[4]
+@@ -2197,7 +2249,7 @@ def log_response(qname, qtype, answer, rcode, tag, spoofedname, qid):
+     return
+ 
+ 
+-def make_response(query):
++def make_our_response(query):
+     '''Create Response'''
+     response = dns.message.Message(query.id)
+     response.flags = dns.flags.QR | dns.flags.RA | (query.flags & dns.flags.RD)
+@@ -2206,7 +2258,6 @@ def make_response(query):
+     return response
+ 
+ 
+-
+ def geo(client_ip):
+     cip = expand_ip(client_ip).split('/')[0]
+     ip6 = False
+@@ -2354,7 +2405,7 @@ def handle_query(raw_data, client_ip):
+             result = (result[0], [], result[2], [])
+ 
+ 
+-    response = make_response(query)
++    response = make_our_response(query)
+     response.set_rcode(result[0]) or dns.rcode.SERVFAIL
+     response.answer = result[1] or []
+     response.authority = result[2] or []

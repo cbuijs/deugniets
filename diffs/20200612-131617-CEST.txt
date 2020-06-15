@@ -1,0 +1,13 @@
+diff --git a/deugniets.py b/deugniets.py
+index 1084da7..a54ea36 100644
+--- a/deugniets.py
++++ b/deugniets.py
+@@ -1749,7 +1749,7 @@ def dns_query(name, rdclass, rdtype, qid, cip, unfilter, fttl):
+             bits = config['cache_ip6_bits'] or 56
+ 
+         cache_ip = '{0}'.format(IP(cip).make_net(str(bits)).strNormal(0))
+-        logging.info('CACHE-IP: {0} -> {1}'.format(cip, cache_ip))
++        logging.info('CACHE-IP: {0} -> {1} (/{2})'.format(cip, cache_ip, bits))
+         cachename = '{0}/{1}'.format(cachename, cache_ip)
+ 
+         #if cip not in private4 and cip not in private6:

@@ -1,0 +1,317 @@
+diff --git a/deugniets.py b/deugniets.py
+index e4b725e..7444ccf 100644
+--- a/deugniets.py
++++ b/deugniets.py
+@@ -1,7 +1,7 @@
+ #!/usr/bin/env python3
+ '''
+ ===========================================================================
+- deugniets.py v2.767-20200312 Copyright 2019-2020 by cbuijs@chrisbuijs.com
++ deugniets.py v2.775-20200401 Copyright 2019-2020 by cbuijs@chrisbuijs.com
+ ===========================================================================
+ 
+  Based on: https://github.com/supriyo-biswas/adblock-dns-server
+@@ -525,7 +525,7 @@ def read_list(filenames, listname, domlst, ip4lst, ip6lst, rxlst, unlst, unip4,
+             newtotal = len(domlst) + len(ip4lst) + len(ip6lst) + len(rxlst) + len(unlst) + len(unip4) + len(unip6) + len(geolst) + len(alias) + len(forwarder) + len(forcettl)
+             total = newtotal - oldtotal
+ 
+-            logging.info('PROCESS-LIST ({0}): Added {1} new entries (Skipped {2} comment/duplicate/empty/invalid)...'.format(lname, total, len(cleanlines) - total))
++            logging.info('PROCESS-LIST ({0}): Added {1} new entries (Skipped {2} comment/overlap/duplicate/empty/invalid)...'.format(lname, total, len(cleanlines) - total))
+ 
+     return domlst, ip4lst, ip6lst, rxlst, unlst, unip4, unip6, geolst
+ 
+@@ -1338,6 +1338,12 @@ def dns_query(name, rdclass, rdtype, qid, cip, unfilter, fttl):
+     if unfilter:
+         cachename = '{0}/{1}'.format(cachename, cip)
+ 
++    if is_ip.search(cip):
++        if cip.find(':') > 0:
++            cachename = '{0}/IP6'.format(cachename, cip)
++        else:
++            cachename = '{0}/IP4'.format(cachename, cip)
++
+     if check_badip(cip):
+         return (dns.rcode.REFUSED, [], [], [])
+ 
+@@ -1472,35 +1478,35 @@ def dns_query(name, rdclass, rdtype, qid, cip, unfilter, fttl):
+         #logging.debug('REQUEST-QNAME-CHECK [{0}]: {1}'.format(qid, qname))
+ 
+         wmatch = is_blacklisted(qname, 'NAME', False) # Due first, faster due to caching of previous results
+-        if wmatch is True:
++
++        if config['block_specific'] and (wmatch is not True) and (qname in bl_dom):
++            logging.warning('SPECIFIC-DOM-HIT [BLACKLIST]: \"{0}\" -> \"{0}\"'.format(qname))
+             blacklistname = qname
+             returnstatus = 'BLACKLISTED'
+             rv = (config['blacklist_rcode'], [], [], [])
+-        elif wmatch is False:
+-            returnstatus = 'WHITELISTED'
+ 
+-        #elif is_formerr('REQUEST', qname, qrdtype):
+-        #    rv = (dns.rcode.SERVFAIL, [], [], [])
+-        #    rv = (dns.rcode.FORMERR, [], [], [])
++        if rv is None:
++            if wmatch is True:
++                blacklistname = qname
++                returnstatus = 'BLACKLISTED'
++                rv = (config['blacklist_rcode'], [], [], [])
+ 
+-        #elif config['check_tld'] and (not tld_rx.search(qname)):
+-        #    if config['log_hits']:
+-        #        logging.warning('REQUEST-NXTLD-HIT: {0}'.format(qname))
+-        #    rv = (config['tld_rcode'], [], [], [])
++            elif wmatch is False:
++                returnstatus = 'WHITELISTED'
+ 
+-        elif config['blockip4'] and (qrdtype == 'A' or qname.endswith('.in-addr.arpa.')):
+-            returnstatus = 'BLACKLISTED'
+-            if config['log_hits']:
+-                logging.warning('REQUEST-IPV4-HIT [{0}]: {1}'.format(qid, cachename))
+-            rv = (config['blacklist_rcode'], [], [], [])
++            elif config['blockip4'] and (qrdtype == 'A' or qname.endswith('.in-addr.arpa.')):
++                returnstatus = 'BLACKLISTED'
++                if config['log_hits']:
++                    logging.warning('REQUEST-IPV4-HIT [{0}]: {1}'.format(qid, cachename))
++                rv = (config['blacklist_rcode'], [], [], [])
+ 
+-        elif config['blockip6'] and (qrdtype == 'AAAA' or qname.endswith('.ip6.arpa.')):
+-            returnstatus = 'BLACKLISTED'
+-            if config['log_hits']:
+-                 logging.warning('REQUEST-IPV6-HIT [{0}]: {1}'.format(qid, cachename))
++            elif config['blockip6'] and (qrdtype == 'AAAA' or qname.endswith('.ip6.arpa.')):
++                returnstatus = 'BLACKLISTED'
++                if config['log_hits']:
++                     logging.warning('REQUEST-IPV6-HIT [{0}]: {1}'.format(qid, cachename))
+ 
+-            #rv = (dns.rcode.NOERROR, [], [], []) # Workaround for searchdomains
+-            rv = (config['blacklist_rcode'], [], [], [])
++                #rv = (dns.rcode.NOERROR, [], [], []) # Workaround for searchdomains
++                rv = (config['blacklist_rcode'], [], [], [])
+ 
+         ip6 =  False
+         if cip.find(':') > 0:
+@@ -1881,15 +1887,25 @@ def dox_request(qid, qname, rdtype, cachename, urls, rfc8484, cip):
+         message.find_rrset(message.additional, dns.name.root, 65535, dns.rdatatype.OPT, create=True, force_unique=True)
+ 
+     if config['use_ecs_ip'] and cip and is_ip.search(cip):
++        ccip = cip
+         if cip.find(':') > 0:
++            if config['override_ecs_ip6'] and is_ip6.search(config['override_ecs_ip6']):
++                ccip = config['override_ecs_ip6']
++
+             bits = config['ecs_privacy6'] or 64
+         else:
++            if config['override_ecs_ip4'] and is_ip4.search(config['override_ecs_ip4']):
++                ccip = config['override_ecs_ip4']
++
+             bits = config['ecs_privacy4'] or 24
+ 
+-        ocip = IP(cip).make_net(str(bits)).strNormal(0)
++        if ccip != cip:
++            logging.info('EDNS-CLIENT-IP-OVERRIDE: {0} -> {1}'.format(cip, ccip))
++
++        ocip = IP(ccip).make_net(str(bits)).strNormal(0)
+ 
+         if bits not in (32, 128):
+-            logging.info('EDNS-CLIENT-SUBNET-PRIVACY: {0} -> {1}/{2}'.format(cip, ocip, bits))
++            logging.info('EDNS-CLIENT-SUBNET-PRIVACY: {0} -> {1}/{2}'.format(ccip, ocip, bits))
+ 
+         cso = clientsubnetoption.ClientSubnetOption(ocip, bits)
+         message.use_edns(edns=0, ednsflags=0, payload=1220, request_payload=None, options=[cso])
+@@ -1900,24 +1916,12 @@ def dox_request(qid, qname, rdtype, cachename, urls, rfc8484, cip):
+     aftag = "Auto-IPv4/6"
+     if config['smartip']:
+         if is_ip.search(cip):
+-            if cip.find(':') < 0:
+-                af = 2
+-            else:
+-                af = 10
+-            
+-        if af is None:
+-            if rdtype == dns.rdatatype.A or ip4arpa.search(qname):
++            if rdtype == dns.rdatatype.A or is_ip4.search(cip) or ip4arpa.search(qname):
+                 af = 2
+-
+-            elif rdtype == dns.rdatatype.AAAA or ip6arpa.search(qname):
++                aftag = 'IPv4'
++            elif rdtype == dns.rdatatype.AAAA or is_ip6.search(cip) or ip6arpa.search(qname):
+                 af = 10
+-
+-        if af == 2:
+-            aftag = 'IPv4'
+-        elif af == 10:
+-            aftag = 'IPv6'
+-
+-    logging.info('TRANSPORT-FAMILY [{0}]: {1} for {2} from {3}'.format(qid, aftag, cachename, cip))
++                aftag = 'IPv6'
+ 
+     retries = 0
+     starttime = int(time.time())
+@@ -1938,7 +1942,14 @@ def dox_request(qid, qname, rdtype, cachename, urls, rfc8484, cip):
+                         ips = '-'
+                         if cached:
+                             ips = list((map(lambda x: x[4][0], cached)))
+-                        logging.info('DOH-QUERY [#{0}]: Query for {1}/IN/{2} to {3}@{4} ({5})'.format(retries, qname, dns.rdatatype.to_text(rdtype), url, port, ', '.join(ips)))
++                            if (af == 2 and len(list(filter(is_ip4.search, ips))) < 1) or (af == 10 and len(list(filter(is_ip6.search, ips))) < 1):
++                                aftag = "Auto-IPv4/6"
++                                af = None
++                        else:
++                            aftag = "Auto-IPv4/6"
++                            af = None
++
++                        logging.info('DOH-QUERY [#{0}]: Query for {1}/IN/{2} to {3}@{4} ({5} - {6})'.format(retries, qname, dns.rdatatype.to_text(rdtype), url, port, aftag, ', '.join(ips)))
+ 
+                     response = False
+                     try:
+@@ -2015,7 +2026,7 @@ def dox_request(qid, qname, rdtype, cachename, urls, rfc8484, cip):
+                         servername, addr = servername.split('#')[0:2]
+                         servername, port = '{0}{1}'.format(servername, '@853').split('@')[0:2]
+                    
+-                        if addr and (config['smartip'] and ((af == 2 and is_ip4.search(addr)) or (af == 10 and is_ip6.search(addr)))):
++                        if addr and (af is None or ((af == 2 and is_ip4.search(addr)) or (af == 10 and is_ip6.search(addr)))):
+                            if config['log_forwards']:
+                                logging.info('DOT-QUERY [#{0}]: Query for {1}/IN/{2} to {3}@{4} ({5})'.format(retries, qname, dns.rdatatype.to_text(rdtype), servername, port, addr))
+ 
+@@ -2037,7 +2048,7 @@ def dox_request(qid, qname, rdtype, cachename, urls, rfc8484, cip):
+                     addr = regex.sub('^' + regex.escape('dns://'), '', url)
+                     addr, port = '{0}{1}'.format(addr, '@53').split('@')[0:2]
+                     if is_ip.search(addr):
+-                        if config['smartip'] and ((af == 2 and is_ip4.search(addr)) or (af == 10 and is_ip6.search(addr))):
++                        if addr and (af is None or ((af == 2 and is_ip4.search(addr)) or (af == 10 and is_ip6.search(addr)))):
+                             if config['log_forwards']:
+                                 logging.info('DNS-QUERY [#{0}]: Query for {1}/IN/{2} to {3}@{4}'.format(retries, qname, dns.rdatatype.to_text(rdtype), addr, port))
+ 
+@@ -2629,6 +2640,8 @@ if __name__ == '__main__':
+     config['use_ecs_ip'] = True
+     config['ecs_privacy4'] = 24 # ECS Privacy for IPv4 - Only show the /24
+     config['ecs_privacy6'] = 64 # ECS Privacy for IPv6 - Only use the /64
++    config['override_ecs_ip4'] = False
++    config['override_ecs_ip6'] = False
+ 
+     # Random RoundRobin
+     config['roundrobin'] = True
+@@ -2654,6 +2667,7 @@ if __name__ == '__main__':
+     config['blockweird'] = True
+     config['check_iprev'] = False
+     config['remove_ip'] = True
++    config['block_specific'] = True # Block specific domains even when TLD is whitelisted
+ 
+     # 0x20 encoding
+     config['0x20'] = False
+diff --git a/doh.alias.list b/doh.alias.list
+index 8ab4b28..2e0b496 100644
+--- a/doh.alias.list
++++ b/doh.alias.list
+@@ -1,69 +1,100 @@
+-# Disable Mozilla/Firefox usage of DoH - https://isc.sans.edu/diary/Blocking+Firefox+DoH+with+Bind/25316
+-googlezip.net = NXDOMAIN
+ google-zip.net = NXDOMAIN
++googlezip.net = NXDOMAIN
+ use-application-dns.net = NXDOMAIN
+ 
+-# https://github.com/curl/curl/wiki/DNS-over-HTTPS
+-# https://github.com/bambenek/block-doh
+-# https://en.wikipedia.org/wiki/Public_recursive_name_server
+-# https://dnsprivacy.org/wiki/display/DP/DNS+Privacy+Test+Servers
+-# https://dnscrypt.info/public-servers
+-# IP Addresses used are the local DNS server (e.g deugniets)
+-
+ 1dot1dot1dot1.cloudflare-dns.com = 192.168.1.32, 2001:981:1759:1::32
+ 8888.google = 192.168.1.32, 2001:981:1759:1::32
++aa.net.uk = 192.168.1.32, 2001:981:1759:1::32
++adblock.mydns.network = 192.168.1.32, 2001:981:1759:1::32
+ adult-filter-dns.cleanbrowsing.org = 192.168.1.32, 2001:981:1759:1::32
++armadillodns.net = 192.168.1.32, 2001:981:1759:1::32
++blockerdns.com = 192.168.1.32, 2001:981:1759:1::32
++bromite.org = 192.168.1.32, 2001:981:1759:1::32
++captnemo.in = 192.168.1.32, 2001:981:1759:1::32
+ cloudflare-dns.com = 192.168.1.32, 2001:981:1759:1::32
+ commons.host = 192.168.1.32, 2001:981:1759:1::32
+-dns.quad9.net = 192.168.1.32, 2001:981:1759:1::32
++digitale-gesellschaft.ch = 192.168.1.32, 2001:981:1759:1::32
+ dns10.quad9.net = 192.168.1.32, 2001:981:1759:1::32
+ dns11.quad9.net = 192.168.1.32, 2001:981:1759:1::32
+ dns9.quad9.net = 192.168.1.32, 2001:981:1759:1::32
+ dns.aaflalo.me = 192.168.1.32, 2001:981:1759:1::32
++dns.aa.net.uk = 192.168.1.32, 2001:981:1759:1::32
+ dns.adguard.com = 192.168.1.32, 2001:981:1759:1::32
+ dns.cmrg.net = 192.168.1.32, 2001:981:1759:1::32
++dns.containerpi.com = 192.168.1.32, 2001:981:1759:1::32
+ dns.digitale-gesellschaft.ch = 192.168.1.32, 2001:981:1759:1::32
+ dns.dns-over-https.com = 192.168.1.32, 2001:981:1759:1::32
+ dns.dnsoverhttps.net = 192.168.1.32, 2001:981:1759:1::32
+ dns-family.adguard.com = 192.168.1.32, 2001:981:1759:1::32
++dns.flatuslifir.is = 192.168.1.32, 2001:981:1759:1::32
+ dns-gcp.aaflalo.me = 192.168.1.32, 2001:981:1759:1::32
+ dns.google = 192.168.1.32, 2001:981:1759:1::32
+ dns.google.com = 192.168.1.32, 2001:981:1759:1::32
++dns.hostux.net = 192.168.1.32, 2001:981:1759:1::32
++dnslify.com = 192.168.1.32, 2001:981:1759:1::32
+ dns.neutopia.org = 192.168.1.32, 2001:981:1759:1::32
+-#dns.nextdns.io = 192.168.1.32, 2001:981:1759:1::32
++dns.nextdns.io = 192.168.1.32, 2001:981:1759:1::32
+ dns-nyc.aaflalo.me = 192.168.1.32, 2001:981:1759:1::32
++dns.quad9.net = 192.168.1.32, 2001:981:1759:1::32
+ dns.rubyfish.cn = 192.168.1.32, 2001:981:1759:1::32
++dns.sb = 192.168.1.32, 2001:981:1759:1::32
++dns.seby.io = 192.168.1.32, 2001:981:1759:1::32
++dns.twnic.tw = 192.168.1.32, 2001:981:1759:1::32
++dnswarden.com = 192.168.1.32, 2001:981:1759:1::32
+ doh1.dnswarden.com = 192.168.1.32, 2001:981:1759:1::32
+ doh2.dnswarden.com = 192.168.1.32, 2001:981:1759:1::32
++doh-2.seby.io = 192.168.1.32, 2001:981:1759:1::32
++doh.42l.fr = 192.168.1.32, 2001:981:1759:1::32
++doh.applied-privacy.net = 192.168.1.32, 2001:981:1759:1::32
+ doh.appliedprivacy.net = 192.168.1.32, 2001:981:1759:1::32
++doh.armadillodns.net = 192.168.1.32, 2001:981:1759:1::32
+ doh.armadilodns.net = 192.168.1.32, 2001:981:1759:1::32
+ doh.blahdns.com = 192.168.1.32, 2001:981:1759:1::32
+ doh.captnemo.in = 192.168.1.32, 2001:981:1759:1::32
++doh.centraleu.pi-dns.com = 192.168.1.32, 2001:981:1759:1::32
+ doh-ch.blahdns.com = 192.168.1.32, 2001:981:1759:1::32
+ doh.cleanbrowsing.org = 192.168.1.32, 2001:981:1759:1::32
+ doh.crypto.sx = 192.168.1.32, 2001:981:1759:1::32
+ doh-de.blahdns.com = 192.168.1.32, 2001:981:1759:1::32
++doh.dnslify.com = 192.168.1.32, 2001:981:1759:1::32
+ doh.dns.sb = 192.168.1.32, 2001:981:1759:1::32
+ doh.dns.sb.cdn.cloudflare.net = 192.168.1.32, 2001:981:1759:1::32
+ doh.dnswarden.com = 192.168.1.32, 2001:981:1759:1::32
++dohdot.coxlab.net = 192.168.1.32, 2001:981:1759:1::32
++doh.eastus.pi-dns.com = 192.168.1.32, 2001:981:1759:1::32
++doh.ffmuc.net = 192.168.1.32, 2001:981:1759:1::32
++doh-fi.blahdns.com = 192.168.1.32, 2001:981:1759:1::32
+ doh-jp.blahdns.com = 192.168.1.32, 2001:981:1759:1::32
++dohjs.org = 192.168.1.32, 2001:981:1759:1::32
+ doh.li = 192.168.1.32, 2001:981:1759:1::32
+ doh.libredns.gr = 192.168.1.32, 2001:981:1759:1::32
+ doh.netweaver.uk = 192.168.1.32, 2001:981:1759:1::32
++doh.northeu.pi-dns.com = 192.168.1.32, 2001:981:1759:1::32
++doh.opendns.com = 192.168.1.32, 2001:981:1759:1::32
+ doh.powerdns.org = 192.168.1.32, 2001:981:1759:1::32
++doh.seby.io:8443 = 192.168.1.32, 2001:981:1759:1::32
+ doh.securedns.eu = 192.168.1.32, 2001:981:1759:1::32
++doh.tiarap.org = 192.168.1.32, 2001:981:1759:1::32
+ doh.tiar.app = 192.168.1.32, 2001:981:1759:1::32
++doh.westus.pi-dns.com = 192.168.1.32, 2001:981:1759:1::32
++doh.xfinity.com = 192.168.1.32, 2001:981:1759:1::32
+ dot.libredns.gr = 192.168.1.32, 2001:981:1759:1::32
+ dot.xfinity.com = 192.168.1.32, 2001:981:1759:1::32
++example.doh.blockerdns.com = 192.168.1.32, 2001:981:1759:1::32
++faelix.net = 192.168.1.32, 2001:981:1759:1::32
+ family-filter-dns.cleanbrowsing.org = 192.168.1.32, 2001:981:1759:1::32
+ google-public-dns-a.google.com = 192.168.1.32, 2001:981:1759:1::32
+ google-public-dns-b.google.com = 192.168.1.32, 2001:981:1759:1::32
++ibksturm.synology.me = 192.168.1.32, 2001:981:1759:1::32
++ibuki.cgnat.net = 192.168.1.32, 2001:981:1759:1::32
++jcdns.fun = 192.168.1.32, 2001:981:1759:1::32
++jp.tiarap.org = 192.168.1.32, 2001:981:1759:1::32
+ jp.tiar.app = 192.168.1.32, 2001:981:1759:1::32
+ libredns.gr = 192.168.1.32, 2001:981:1759:1::32
+ odvr.nic.cz = 192.168.1.32, 2001:981:1759:1::32
+ one.one.one.one = 192.168.1.32, 2001:981:1759:1::32
++rdns.faelix.net = 192.168.1.32, 2001:981:1759:1::32
+ rpz-public-resolver1.rrdns.pch.net = 192.168.1.32, 2001:981:1759:1::32
+ rpz-public-resolver2.rrdns.pch.net = 192.168.1.32, 2001:981:1759:1::32
+ security-filter-dns.cleanbrowsing.org = 192.168.1.32, 2001:981:1759:1::32
+ static.captnemo.in = 192.168.1.32, 2001:981:1759:1::32
+-

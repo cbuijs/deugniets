@@ -1,0 +1,253 @@
+diff --git a/deugniets.py b/deugniets.py
+index 4b22c03..60fb6aa 100644
+--- a/deugniets.py
++++ b/deugniets.py
+@@ -1,7 +1,7 @@
+ #!/usr/bin/env python3
+ '''
+ ===========================================================================
+- deugniets.py v3.16-20200609 Copyright 2019-2020 by cbuijs@chrisbuijs.com
++ deugniets.py v3.19-20200611 Copyright 2019-2020 by cbuijs@chrisbuijs.com
+ ===========================================================================
+ 
+  Based on: https://github.com/supriyo-biswas/adblock-dns-server
+@@ -494,6 +494,7 @@ def read_list(filenames, listname, domlst, ip4lst, ip6lst, rxlst, unlst, unip4,
+             oldtotal = len(domlst) + len(ip4lst) + len(ip6lst) + len(rxlst) + len(unlst) + len(unip4) + len(unip6) + len(geolst) + len(alst) + len(flst)
+             
+             if ftype is False or ftype == 'IP':
++                before = len(ip4lst) + len(ip6lst)
+                 logging.info('PROCESS-LIST ({0}): Getting IPs...'.format(lname))
+                 for entry in list(filter(None, filter(is_ip4.search, cleanlines))):
+                     ip4lst[entry] = entry
+@@ -501,13 +502,18 @@ def read_list(filenames, listname, domlst, ip4lst, ip6lst, rxlst, unlst, unip4,
+                 for entry in list(filter(None, filter(is_ip6.search, cleanlines))):
+                     ip6lst[addzero(entry)] = entry
+ 
++                logging.info('PROCESS-LIST ({0}): Fetched {1} IPs'.format(lname, (len(ip4lst) + len(ip6lst)) - before))
++
+ 
+             if ftype is False or ftype == 'DOM':
++                before = len(domlst)
+                 logging.info('PROCESS-LIST ({0}): Getting DOMAINs...'.format(lname))
+                 domlst.update(dict.fromkeys(list(map(make_dom, filter(None, filter(is_dom.search, cleanlines)))), 'Domain'))
++                logging.info('PROCESS-LIST ({0}): Fetched {1} DOMAINs'.format(lname, len(domlst) - before))
+ 
+ 
+             if ftype is False or ftype == 'DOMWORD':
++                before = len(rxlst)
+                 logging.info('PROCESS-LIST ({0}): Getting DOMWORDs...'.format(lname))
+                 for entry in list(filter(None, filter(is_domword.search, cleanlines))):
+                     try:
+@@ -517,8 +523,11 @@ def read_list(filenames, listname, domlst, ip4lst, ip6lst, rxlst, unlst, unip4,
+                     except BaseException as err:
+                         logging.warning('LIST [{0}]: Invalid Syntax: \"{1}\" - {2}'.format(lname, entry, err))
+ 
++                logging.info('PROCESS-LIST ({0}): Fetched {1} DOMWORDs'.format(lname, len(rxlst) - before))
++
+ 
+             if ftype is False or ftype == 'GEO':
++                before = len(geolst)
+                 logging.info('PROCESS-LIST ({0}): Getting GEOs...'.format(lname))
+                 for entry in list(filter(None, filter(is_geo.search, cleanlines))):
+                     entry = entry.lstrip('@')
+@@ -534,8 +543,11 @@ def read_list(filenames, listname, domlst, ip4lst, ip6lst, rxlst, unlst, unip4,
+                     else:
+                         geolst[regex.sub('[^a-zA-Z0-9\/]+', '', entry.upper())] = entry
+ 
++                logging.info('PROCESS-LIST ({0}): Fetched {1} GEOs'.format(lname, len(geolst) - before))
++
+ 
+             if ftype is False or ftype == 'ALIAS':
++                before = len(alst)
+                 logging.info('PROCESS-LIST ({0}): Getting ALIASes...'.format(lname))
+                 for entry in list(filter(None, filter(is_alias.search, cleanlines))):
+                     datatype = False
+@@ -558,8 +570,11 @@ def read_list(filenames, listname, domlst, ip4lst, ip6lst, rxlst, unlst, unip4,
+                     else:
+                         logging.warning('LIST [{0}]: Invalid ALIAS Syntax: \"{1}\"'.format(lname, entry))
+ 
++                logging.info('PROCESS-LIST ({0}): Fetched {1} ALIASes'.format(lname, len(alst) - before))
++
+ 
+             if ftype is False or ftype == 'FORWARD':
++                before = len(flst)
+                 logging.info('PROCESS-LIST ({0}): Getting FORWARDers...'.format(lname))
+                 for entry in list(filter(None, filter(is_forwarder.search, cleanlines))):
+                     domain, value = get_value(entry, '>', is_ip.search, False)
+@@ -570,8 +585,11 @@ def read_list(filenames, listname, domlst, ip4lst, ip6lst, rxlst, unlst, unip4,
+                     else:
+                         logging.warning('LIST [{0}]: Invalid FORWARDER Syntax: \"{1}\"'.format(lname, entry))
+ 
++                logging.info('PROCESS-LIST ({0}): Fetched {1} FORWARDers'.format(lname, len(flst) - before))
++
+ 
+             if ftype is False or ftype == 'UNFILTER':
++                before = len(unlst) + len(unip4) + len(unip6)
+                 logging.info('PROCESS-LIST ({0}): Getting UNFILTERs...'.format(lname))
+                 for entry in list(filter(None, filter(is_unfilter.search, cleanlines))):
+                     domip = entry.lstrip('+')
+@@ -596,8 +614,11 @@ def read_list(filenames, listname, domlst, ip4lst, ip6lst, rxlst, unlst, unip4,
+                     else:
+                         logging.warning('LIST [{0}]: Invalid UnFilter Syntax: \"{1}\"'.format(lname, entry))
+ 
++                logging.info('PROCESS-LIST ({0}): Fetched {1} UNFILTERs'.format(lname, (len(unlst) + len(unip4) + len(unip6)) - before))
++
+ 
+             if ftype is False or ftype == 'RX':
++                before = len(rxlst)
+                 logging.info('PROCESS-LIST ({0}): Getting REGEXes...'.format(lname))
+                 clines = cleanlines
+                 if ftype is False:
+@@ -610,6 +631,8 @@ def read_list(filenames, listname, domlst, ip4lst, ip6lst, rxlst, unlst, unip4,
+                     except BaseException as err:
+                         logging.warning('LIST [{0}]: Invalid Syntax: \"{1}\" - {2}'.format(lname, entry, err))
+ 
++                logging.info('PROCESS-LIST ({0}): Fetched {1} REGEXes'.format(lname, len(rxlst) - before))
++
+ 
+             newtotal = len(domlst) + len(ip4lst) + len(ip6lst) + len(rxlst) + len(unlst) + len(unip4) + len(unip6) + len(geolst) + len(alst) + len(flst)
+             total = newtotal - oldtotal
+@@ -2513,21 +2536,25 @@ def dox_request(qid, qname, rdtype, cachename, urls, rfc8484, cip):
+ 
+                 # DOH
+                 if url.startswith('https://'):
+-                    port = 443 # !!! TODO: Need to extract/remove from URL !!!
++                    hostname = url.split('/')[2]
++                    path = '/'.join(url.split('/')[3:])
++                    port = 443
++                    if hostname.find('@') > -1:
++                        port = int(hostname.split('@')[1])
++                        hostname = hostname.split('@')[0]
++                    
+                     if config['nextdns'] and config['nextdns_id']:
+                         url += '/{0}-{1}'.format(regex.sub('\s+', '%20', config['nextdns_id']), regex.sub('[\.\:]+', '-', cip))
+ 
+                     ips = False
+                     if af is not None:
+-                        cached = cache.get('{0}/{1}/GETADDRINFO'.format(url.split('/')[2], port))
++                        cached = cache.get('{0}/{1}/GETADDRINFO'.format(hostname, port))
+                         if cached:
+                             if af == 2:
+                                 ips = list(filter(is_ip4.search, list((map(lambda x: x[4][0], cached)))))
+                             elif af == 10:
+                                 ips = list(filter(is_ip6.search, list((map(lambda x: x[4][0], cached)))))
+ 
+-                    #if ips:
+-                    #    logging.debug('BOOTSTRAP: {0} - {1} - {2} -> {3} ({4})'.format(cip, ip6, url, ', '.join(ips), aftag))
+                     if not ips:
+                         ips = [None]
+          
+@@ -2535,12 +2562,14 @@ def dox_request(qid, qname, rdtype, cachename, urls, rfc8484, cip):
+                         if ip and ip.find(':') > -1:
+                             ip = '[{0}]'.format(ip)
+ 
++                        dnsurl = 'https://{0}/{1}'.format(hostname, path)
++
+                         if config['log_forwards']:
+-                            logging.info('DOH-QUERY [#{0}]: Query for {1}/IN/{2} to {3}@{4} (BOOTSTRAP-{5}: {6})'.format(retries, qname, dns.rdatatype.to_text(rdtype), url, port, aftag, ip))
++                            logging.info('DOH-QUERY [#{0}]: Query for {1}/IN/{2} to https://{3}@{4}/{5} (BOOTSTRAP-{6}: {7})'.format(retries, qname, dns.rdatatype.to_text(rdtype), hostname, port, path, aftag, ip))
+ 
+                         response = False
+                         try:
+-                            response = dns.query.https(message, url, post=config['doh_post'], port=int(port), timeout=5, session=requests_session, bootstrap_address=str(ip))
++                            response = dns.query.https(message, dnsurl, post=config['doh_post'], port=int(port), timeout=5, session=requests_session, bootstrap_address=str(ip))
+ 
+                         except BaseException as err:
+                             logging.error('DOH-ERROR: Query for {0}/IN/{1} to {2} - {3}'.format(qname, dns.rdatatype.to_text(rdtype), url, err))
+@@ -3113,13 +3142,13 @@ def run_server():
+ 
+     logging.info('SERVER: DeugNietS Starting on port {0}'.format(dnsport))
+ 
+-    udp_server4 = ThreadedUDPServer4(('', dnsport), UDPHandler)
+-    udp_server6 = ThreadedUDPServer6(('', dnsport), UDPHandler)
++    udp_server4 = ThreadedUDPServer4(('127.0.0.1', dnsport), UDPHandler)
++    udp_server6 = ThreadedUDPServer6(('::1', dnsport), UDPHandler)
+     udp_server_thread4 = threading.Thread(target=udp_server4.serve_forever)
+     udp_server_thread6 = threading.Thread(target=udp_server6.serve_forever)
+ 
+-    tcp_server4 = ThreadedTCPServer4(('', dnsport), TCPHandler)
+-    tcp_server6 = ThreadedTCPServer6(('', dnsport), TCPHandler)
++    tcp_server4 = ThreadedTCPServer4(('127.0.0.1', dnsport), TCPHandler)
++    tcp_server6 = ThreadedTCPServer6(('::1', dnsport), TCPHandler)
+     tcp_server_thread4 = threading.Thread(target=tcp_server4.serve_forever)
+     tcp_server_thread6 = threading.Thread(target=tcp_server6.serve_forever)
+ 
+@@ -3207,28 +3236,33 @@ def run_server():
+             hostname = dnsserver
+             ips = False
+ 
+-            if dnsserver.find('#') > -1:
+-                ips = regex.split('\s*,\s*', regex.split('\s*#\s*', dnsserver)[1])
+-                dnsserver = regex.split('\s*#\s*', dnsserver)[0]
++            proto = hostname.split(':')[0].lower()
++            if proto not in ('dns', 'https', 'tls'):
++                proto = 'dns'
++                hostname = 'dns://{0}'.format(hostname)
+ 
+-            port = int('{0}@0'.format(dnsserver).split('@')[1])
+-            dnsserver = dnsserver.split('@')[0]
+-            hostname = dnsserver
+-                
+-            if hostname.find('/') > -1:
+-                hostname = hostname.split('/')[2]
++            if hostname.find('#') > -1:
++                ips = regex.split('\s*,\s*', regex.split('\s*#\s*', hostname)[1])
++                hostname = regex.split('\s*#\s*', hostname)[0]
+ 
++            path = ''
++            if len(hostname.split('/')) > 3:
++                path = '/'.join(hostname.split('/')[3:])
++
++            hostname = hostname.split('/')[2]
++
++            port = int('{0}@0'.format(hostname).split('@')[1])
++            hostname = hostname.split('@')[0]
++            
+             #if hostname.find('.opendns.com'):
+             #    config['force4'] = True
+             #    config['force6'] = False
+ 
+-            dox = 'DNS'
++            dox = proto.upper()
+             aport = port or 53
+-            if dnsserver.startswith('https://'):
+-                dox = 'HTTPS'
++            if dox == 'HTTPS':
+                 aport = port or 443
+-            elif dnsserver.startswith('tls://'):
+-                dox = 'TLS'
++            elif dox == 'TLS':
+                 aport = port or 853
+ 
+             # !!! Fix # addresses add
+@@ -3250,10 +3284,10 @@ def run_server():
+                             else:
+                                 getaddrinfo.append((2, 1, 6, '', (ip, aport)))
+ 
+-                            logging.info('{0}-{1}-SERVER-ADDED: {2} = BOOTSTRAP:{3} ({4})'.format(dox, tag, dnsserver, ip, geo(ip)))
++                            logging.info('{0}-{1}-SERVER-ADDED: {2} = BOOTSTRAP:{3} ({4})'.format(dox, tag, hostname, ip, geo(ip)))
+ 
+                         else:
+-                            logging.warning('{0}-SERVER-DISCARDED: {1} = BOOTSTRAP:{2} ({3})'.format(dox, dnsserver, ip, geo(ip)))
++                            logging.warning('{0}-SERVER-DISCARDED: {1} = BOOTSTRAP:{2} ({3})'.format(dox, hostname, ip, geo(ip)))
+ 
+                     if getaddrinfo:
+                         #logging.info('PRE-CACHE: {0}://{1}@{2} = {3}'.format(dox, hostname, aport, ', '.join(ips)))
+@@ -3263,13 +3297,14 @@ def run_server():
+                 else:
+                     ips = list(map(lambda x: x[4][0], socket.getaddrinfo('{0}.'.format(hostname.rstrip('.')), aport, type=socket.SOCK_STREAM))) # Pre-cache
+ 
+-                logging.info('{0}-NAME-SERVER: {1}://{2}@{3} ({4})'.format(dox, dox.lower(), hostname, aport, ', '.join(ips)))
+-                newentry = '{0}://{1}@{2}'.format(dox.lower(), hostname, aport)
++                newentry = '{0}://{1}@{2}'.format(dox.lower(), hostname, aport, path)
+             else:
+-                logging.info('{0}-NAME-SERVER: {1}://{2}@{3}'.format(dox, dox.lower(), hostname, aport))
+                 newentry = 'dns://{0}@{1}'.format(hostname, aport)
+                  
+             if newentry:
++                if path:
++                    newentry = '{0}/{1}'.format(newentry, path)
++                logging.info('{0}-NAME-SERVER: {1}'.format(dox, newentry, ','.join(ips) or '-'))
+                 newnameservers.append(newentry.lower())
+ 
+     if newnameservers:

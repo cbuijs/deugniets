@@ -1,0 +1,48 @@
+diff --git a/deugniets.py b/deugniets.py
+index 2a4cdd3..05349df 100644
+--- a/deugniets.py
++++ b/deugniets.py
+@@ -1,7 +1,7 @@
+ #!/usr/bin/env python3
+ '''
+ ===========================================================================
+- deugniets.py v3.261-20200612 Copyright 2019-2020 by cbuijs@chrisbuijs.com
++ deugniets.py v3.262-20200612 Copyright 2019-2020 by cbuijs@chrisbuijs.com
+ ===========================================================================
+ 
+  Based on: https://github.com/supriyo-biswas/adblock-dns-server
+@@ -16,9 +16,10 @@
+  ToDo:
+  - Work on geosteer (Geo based answers/ordering)
+    - Seems to be okay as is
++   - Add distance-check when no matches
+  - Work on roundrobin (rrrr) seems to be random
+-   - Broken
+- - Finish TRIE rework of domain-based dict's
++   - Order of RRSET not maintained, dnspython weakness?
++ - Finish TRIE rework of domain-based dict
+    - Finish UNFILTER (+ cache) one, mix of ip/dom
+    - Do geo_cache (remove cachetools)
+  - Refurbish whole stack of listeners, multi-threading etc
+@@ -1615,8 +1616,8 @@ def geosteer(cip, qname, answer):
+ 
+         geoinfo = geo(cip)
+         steerlist = geonames(geoinfo)
+-        if config['log_verbose']:
+-            logging.info('STEERLIST: {0} -> {1}'.format(cip, ', '.join(steerlist)))
++        #if config['log_verbose']:
++        #    logging.info('STEERLIST: {0} -> {1}'.format(cip, ', '.join(steerlist)))
+ 
+         if steerlist:
+             new_answer = []
+@@ -1630,8 +1631,8 @@ def geosteer(cip, qname, answer):
+                 if rrset.rdtype in (1, 28) and len(rrdatalist) > 1:
+                     #logging.info('GEO-STEER: Orginal order: {0}/{1} = {2}'.format(rrname, rdtypet, ', '.join(rrdatalist)))
+                     for ip in rrdatalist:
+-                        if config['log_verbose']:
+-                            logging.info('GEO-STEER-RR: {0}/{1} = {2} ({3})'.format(rrname, rdtypet, ip, geo(ip)))
++                        #if config['log_verbose']:
++                        #    logging.info('GEO-STEER-RR: {0}/{1} = {2} ({3})'.format(rrname, rdtypet, ip, geo(ip)))
+ 
+                         geoname = check_geo(qname, 'IP', ip, steerlist, 'GEOSTEER')
+                         if geoname:

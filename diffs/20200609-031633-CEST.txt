@@ -1,0 +1,646 @@
+diff --git a/Dockerfile b/Dockerfile
+index d4f3149..5b3f4b5 100644
+--- a/Dockerfile
++++ b/Dockerfile
+@@ -7,17 +7,17 @@
+ 
+ FROM python:3
+ EXPOSE 53/udp
+-ADD deugniets.py /opt/deugniets/deugniets.py
+-ADD cache.py /opt/deugniets/cache.py
+-ADD requirements.txt /opt/deugniets/requirements.txt
+-ADD deugniets.conf.docker /opt/deugniets/deugniets.conf
+-ADD local.list.docker /opt/deugniets/local.list
++ADD deugniets.py deugniets.py
++ADD cache.py cache.py
++ADD requirements.txt requirements.txt
++ADD deugniets.conf.docker deugniets.conf
++ADD local.list.docker local.list
+ RUN pip3 install --upgrade pip
+ RUN pip3 install --upgrade chardet==3.0.4
+ RUN pip3 install --upgrade urllib3==1.25.7
+ RUN pip3 install --upgrade git+https://github.com/opendns/dnspython-clientsubnetoption@master
+ RUN pip3 install --upgrade git+https://github.com/rthalley/dnspython@master
+ RUN pip3 install --upgrade git+https://github.com/psf/requests@master
+-RUN pip3 install --upgrade -r /opt/deugniets/requirements.txt
+-CMD [ "python3", "/opt/deugniets/deugniets.py", "/opt/deugniets/deugniets.conf" ]
++RUN pip3 install --upgrade -r requirements.txt
++CMD [ "python3", "deugniets.py", "deugniets.conf" ]
+ 
+diff --git a/deugniets.conf.docker b/deugniets.conf.docker
+index 2dca1e8..c302aab 100644
+--- a/deugniets.conf.docker
++++ b/deugniets.conf.docker
+@@ -1,78 +1,17 @@
+ [DEUGNIETS]
+ port = 53
+ 
+-# CloudFlare
+-#nameservers = ["1.1.1.1", "1.0.0.1", "2606:4700:4700::1111", "2606:4700:4700::1001"]
+-# Google
+-#nameservers = ["8.8.8.8", "8.8.4.4", "2001:4860:4860::8888", "2001:4860:4860::8844"]
+-# Quad9
+-nameservers = ["9.9.9.9", "149.112.112.9", "2620:fe::9", "2620:fe::fe:9"]
+-
+-# DOH Servers
+-# https://github.com/curl/curl/wiki/DNS-over-HTTPS#publicly-available-servers
+-#nameservers = ["https://cloudflare-dns.com/dns-query"]
+-#nameservers = ["https://dns.google/dns-query"]
+-#nameservers = ["https://dns10.quad9.net/dns-query"]
+-#nameservers = ["https://doh.powerdns.org"]
+-
++nameservers = ["https://dns11.quad9.net/dns-query#9.9.9.11,149.112.112.11,2620:fe::11,2620:fe::fe:11"]
+ safe_nameservers = false
+ 
+-blacklist_cache_ttl = 60
+-blacklist_ttl = 3600
+-rcode_ttl = 30
+-min_ttl = 30
+-max_ttl = 86400
+-spoof_ttl = 3600
+-
+-roundrobin = true
+-randomroundrobin = false
+-
+-collapse = true
+-min_resp = true
+-parent_hit = false
+-parent_cache_hit = false
+-
+-blockip4 = false
+-blockip6 = false
+-blockweird = true
+-smartip = true
+-ignoreip = false
+-
+-optimize = true
+-whitelist = ["/opt/deugniets/local.list", "https://raw.githubusercontent.com/cbuijs/accomplist/master/deugniets/deugniets.white.list"]
++optimize = false
++whitelist = ["local.list", "https://raw.githubusercontent.com/cbuijs/accomplist/master/deugniets/deugniets.white.list"]
+ blacklist = ["https://raw.githubusercontent.com/cbuijs/accomplist/master/deugniets/deugniets.black.list"]
+ 
+-log_requests = true
+-log_responses = true
+-log_caching = false
+-log_hits = true
+-log_forwards = true
+-
+ blacklist_rcode = "REFUSED"
+ tld_rcode = "NXDOMAIN"
+ redirect_ip = ["0.0.0.0", "::"]
+ 
+-use_dnsl = false
+-dnsbl = ["BLOCKLIST.DE:ip:de.bl.blocklist.de.", "SPAMHAUS-ZEN:ip:zen.spamhaus.org.", "SPAMHAUS-DBL:dom:dbl.spamhaus.org.", "CYMRU-BOGON4:ip4:v4.bogons.cymru.com", "CYMRU-BOGON6:ip6:v6.bogons.cymru.com"]
+-dnswl = []
+-dnsl_ttl = 259200
+-
+ check_tld = true
+ tld_url = "https://data.iana.org/TLD/tlds-alpha-by-domain.txt"
+ 
+-check_ratio = false
+-
+-retry_count = 5
+-retry_wait = 0.33
+-
+-unfilter = false
+-unfilter_ttl = 5
+-unfilter_whitelist = false
+-
+-filtering = true
+-filter_request = true
+-filter_response = true
+-
+-fix_noerror = false
+-fix_nxdomain = false
+-
+diff --git a/deugniets.py b/deugniets.py
+index 95e89c8..4d7c8c7 100644
+--- a/deugniets.py
++++ b/deugniets.py
+@@ -1,7 +1,7 @@
+ #!/usr/bin/env python3
+ '''
+ ===========================================================================
+- deugniets.py v3.14-20200601 Copyright 2019-2020 by cbuijs@chrisbuijs.com
++ deugniets.py v3.15-20200604 Copyright 2019-2020 by cbuijs@chrisbuijs.com
+ ===========================================================================
+ 
+  Based on: https://github.com/supriyo-biswas/adblock-dns-server
+@@ -25,7 +25,7 @@
+    - Fix listening/response IP when responding (same IP out as in), IPv6
+    - Fix TCP listeners
+      - Might be fixed already, check/validate/test
+-   - Add multiple addresses/ports liste_on feature
++   - Add multiple addresses/ports listen_on feature
+  - Ability to disable resolution of aliases/spoofs
+  - Alias based on regex
+    - See instigator
+@@ -210,7 +210,7 @@ is_dox4 = regex.compile('^(dn|http|tl)s://(do[ht]|ip(v)*)4\..*$', regex.I)
+ is_dox6 = regex.compile('^(dn|http|tl)s://(do[ht]|ip(v)*)6\..*$', regex.I)
+ 
+ # GEO
+-is_geo = regex.compile('^@[a-z\/\:\s]+$', regex.I)
++is_geo = regex.compile('^@([a-z\/\:\s]+|[0-9]+)$', regex.I)
+ 
+ # Regex
+ is_regex = regex.compile('^/.*/$', regex.I)
+@@ -1359,17 +1359,20 @@ def check_geo(qname, valuetype, testvalue, geolst, listname):
+             return city
+ 
+         # Multiples
+-        glist = [continent, country, area, city]
++        #glist = [continent, country, area, city]
++        glist = {'CONTINENT':continent, 'COUNTRY':country, 'AREA':area, 'CITY':city}
+         gcheck = False
+         for label in glist:
+-            if label == '?':
++            value = glist[label]
++            if value == '?':
+                 break
+ 
+             if gcheck:
+-                gcheck = '{0}/{1}'.format(label, gcheck)
++                gcheck = '{0}/{1}'.format(value, gcheck)
+             else:
+-                gcheck = label
++                gcheck = value
+ 
++            #logging.info('GEO-DEBUG: {0} - {1} - {2}'.format(label, value, gcheck))
+             if gcheck in geolst:
+                 if config['log_hits'] and config['log_verbose'] and listname:
+                     logging.warning('{0}-GEO-HIT [{1}]: {2} -> {3} -> {4}'.format(valuetype, listname, qname, testvalue, gcheck))
+@@ -1576,39 +1579,43 @@ def geonames(geoname):
+    
+ def geosteer(cip, qname, answer):
+     if config['geo_steer'] and is_ip.search(cip) and answer:
+-        steerlist=geonames(geo(cip))
+-        if is_ip4.search(cip) and config['override_ecs_ip4']:
+-            steerlist=geonames(geo(config['override_ecs_ip4']))
+-        elif is_ip6.search(cip) and config['override_ecs_ip6']:
+-            steerlist=geonames(geo(config['override_ecs_ip6']))
++        gcip = cip
++        if cip.find(':') > -1 and config['override_ecs_ip6']:
++            gcip = config['override_ecs_ip6']
++        elif config['override_ecs_ip4']:
++            gcip = config['override_ecs_ip4']
+ 
+-        logging.info('GEO-STEER: {0} using {1}'.format(cip, ', '.join(steerlist)))
++        steerlist = geonames(geo(gcip))
++
++        if steerlist:
++            #logging.info('GEO-STEER: Will be using {0} for {1}/{2}'.format('/'.join(steerlist), cip, gcip))
+         
+-        new_answer = []
+-        for rrset in answer:
+-            rrname = str(rrset.name)
+-            rdtypet = dns.rdatatype.to_text(rrset.rdtype)
+-            ttl = int(rrset.ttl)
+-            rrdatalist = list(map(str, rrset))
+-            newrrdata = list()
+-            geodata = set()
+-            if rrset.rdtype in (1, 28) and len(rrdatalist) > 1:
+-                for ip in rrdatalist:
+-                    geoname = check_geo(qname, 'IP', ip, steerlist, 'GEOSTEER')
+-                    if geoname:
+-                        #logging.info('GEO-STEER: {0}/{1} = {2} (~ {3})'.format(rrname, rdtypet, ip, geoname))
+-                        newrrdata.append(ip)
+-                        geodata.add(geoname)
+-                    #else:
+-                    #    logging.info('GEO-STEER: {0}/{1} = {2} (~ {3} = NO-PREF)'.format(rrname, rrset.rdtypet, ip, geo(ip)))
++            new_answer = []
++            for rrset in answer:
++                rrname = str(rrset.name)
++                rdtypet = dns.rdatatype.to_text(rrset.rdtype)
++                ttl = int(rrset.ttl)
++                rrdatalist = list(map(str, rrset))
++                newrrdata = list()
++                geodata = set()
++                if rrset.rdtype in (1, 28) and len(rrdatalist) > 1:
++                    for ip in rrdatalist:
++                        geoname = check_geo(qname, 'IP', ip, steerlist, 'GEOSTEER')
++                        if geoname:
++                            #logging.info('GEO-STEER: {0}/{1} = {2} (~ {3})'.format(rrname, rdtypet, ip, geoname))
++                            newrrdata.append(ip)
++                            geodata.add(geoname)
++                        #else:
++                        #    logging.info('GEO-STEER: {0}/{1} = {2} (~ {3} = NO-PREF)'.format(rrname, rrset.rdtypet, ip, geo(ip)))
+                 
+-            if newrrdata and geodata and len(newrrdata) < len(rrdatalist):
+-                logging.info('GEO-STEER: {0}/{1} from {2} to {3} answers (~ {4})'.format(rrname, rdtypet, len(rrdatalist), len(newrrdata), ', '.join(geodata)))
+-                rrdatalist = newrrdata
++                if newrrdata and geodata and len(newrrdata) < len(rrdatalist):
++                    logging.info('GEO-STEER: {0}/{1} from {2} to {3} answers (~ {4})'.format(rrname, rdtypet, len(rrdatalist), len(newrrdata), ', '.join(geodata)))
++                    rrdatalist = newrrdata
+ 
+-            new_answer.append(dns.rrset.from_text_list(rrname, ttl, 'IN', rdtypet, rrdatalist))
++                new_answer.append(dns.rrset.from_text_list(rrname, ttl, 'IN', rdtypet, rrdatalist))
+ 
+-        return new_answer
++            if new_answer:
++                return new_answer
+ 
+     return answer
+ 
+@@ -2053,107 +2060,109 @@ def dns_query(name, rdclass, rdtype, qid, cip, unfilter, fttl):
+                     if returnstatus != 'OK': # eg, not WHITELISTED
+                         status = False
+                     else:
+-                        for rrset in response.answer: # + response.authority + response.additional:
+-                            rrdtype = dns.rdatatype.to_text(rrset.rdtype)
+-                            rrname = str(rrset.name)
+-                            if rrname not in seen:
+-                                seen.add(rrname) # Unduplicate data/qname chain
+-                                #logging.debug('RESPONSE-CHAIN-NAME-CHECK [{0}]: {1}'.format(qid, rrset.name))
+-                                if is_formerr('CHAIN-NAME', rrname, rrdtype):
+-                                    status = True
+-                                    blacklistname = rrname
+-                                    break
+-                                else:
+-                                    status, hitdata = is_blacklisted(qname, rrname, 'CHAIN-NAME', False)
+-                                    if status is not None:
+-                                        if status is True: # Blacklisted
+-                                           returnstatus = 'BLACKLISTED'
+-                                           blacklistname = rrname
+-                                           break
+-                                        else: # Whitelisted
+-                                           returnstatus = 'WHITELISTED'
+-                                           break
+-
+-                            if rrdtype in ('A', 'AAAA', 'CNAME', 'MX', 'NS', 'PTR', 'SRV'):
+-                                for rr in rrset.copy():
+-                                    if hasattr(rr, 'target'):
+-                                        target = str(rr.target)
+-                                    elif hasattr(rr, 'address'):
+-                                        target = str(rr.address)
++                        sections = {'ANSWER':response.answer, 'AUTHORITY':response.authority, 'ADDITIONAL':response.additional }
++                        for section in sections:
++                            for rrset in sections.get(section, []):
++                                rrdtype = dns.rdatatype.to_text(rrset.rdtype)
++                                rrname = str(rrset.name)
++                                if rrname not in seen:
++                                    seen.add(rrname) # Unduplicate data/qname chain
++                                    #logging.debug('RESPONSE-CHAIN-NAME-CHECK [{0}]: {1}'.format(qid, rrset.name))
++                                    if is_formerr('CHAIN-NAME', rrname, rrdtype):
++                                        status = True
++                                        blacklistname = rrname
++                                        break
+                                     else:
+-                                        target = str(rr)
+-
+-                                    #logging.debug('RR [{0}]: {1}/{2}={3}'.format(qid, rrname, rrdtype, target))
+-
+-                                    if target not in seen:
+-                                        seen.add(target)
+-                                        #logging.debug('RESPONSE-TARGET-CHECK [{0}]: {1}'.format(qid, target))
+-
+-                                        if is_formerr('RESPONSE', target, rrdtype):
+-                                            status = True
+-                                            returnstatus = 'BLACKLISTED'
+-                                            blacklistname = target
+-                                            break
+-                                        elif rrdtype in ('A', 'AAAA') and (config['redirect_ip'] and target in config['redirect_ip']):
+-                                            logging.warning('REDIRECT-IP-HIT: {0} -> {1}'.format(rrname, target))
+-                                            status = False
+-                                            returnstatus = 'WHITELISTED'
+-                                            break
++                                        status, hitdata = is_blacklisted(qname, rrname, 'CHAIN-NAME', False)
++                                        if status is not None:
++                                            if status is True: # Blacklisted
++                                               returnstatus = 'BLACKLISTED'
++                                               blacklistname = rrname
++                                               break
++                                            else: # Whitelisted
++                                               returnstatus = 'WHITELISTED'
++                                               break
++
++                                if rrdtype in ('A', 'AAAA', 'CNAME', 'MX', 'NS', 'PTR', 'SRV'):
++                                    for rr in rrset.copy():
++                                        if hasattr(rr, 'target'):
++                                            target = str(rr.target)
++                                        elif hasattr(rr, 'address'):
++                                            target = str(rr.address)
+                                         else:
+-                                            if rrdtype in ('A', 'AAAA'):
+-                                                status, hitdata = is_blacklisted(rrname, target, 'DATA', True)
++                                            target = str(rr)
++
++                                        #logging.info('RR [{0}]: {1}/{2}={3} ({4})'.format(qid, rrname, rrdtype, target, section))
++
++                                        if target not in seen:
++                                            seen.add(target)
++                                            #logging.debug('RESPONSE-TARGET-CHECK [{0}]: {1}'.format(qid, target))
++
++                                            if is_formerr('RESPONSE', target, rrdtype):
++                                                status = True
++                                                returnstatus = 'BLACKLISTED'
++                                                blacklistname = target
++                                                break
++                                            elif rrdtype in ('A', 'AAAA') and (config['redirect_ip'] and target in config['redirect_ip']):
++                                                logging.warning('REDIRECT-IP-HIT: {0} -> {1} ({2})'.format(rrname, target, section))
++                                                status = False
++                                                returnstatus = 'WHITELISTED'
++                                                break
+                                             else:
+-                                                if rrdtype == 'CNAME':
+-                                                    tag = 'CNAME-CLOAK'
++                                                if rrdtype in ('A', 'AAAA'):
++                                                    status, hitdata = is_blacklisted(rrname, target, 'DATA', True)
+                                                 else:
+-                                                    tag = '{0}-DATA'.format(rrdtype)
+-
+-                                                status, hitdata = is_blacklisted(rrname, target, tag, False)
+-
+-                                            if status is not None:
+-                                                if status is True: # Blacklisted
+-                                                    if config['remove_ip'] and rrdtype in ('A', 'AAAA'): # Remove IP from answer instead of blocking whole
+-                                                        rrset.remove(rr)
+-                                                        rrcount = len(rrset)
+-                                                        if config['log_verbose']:
+-                                                            rlog = '\"{0}\" -> \"{1}\" ({2} RRs left)'.format(rrname, hitdata, rrcount)
+-                                                            if qname != rrname:
+-                                                                rlog = '\"{0}\" -> {1}'.format(qname, rlog)
+-                                                            logging.warning('REMOVED-IP: {0} from {1}'.format(target, rlog))
+-
+-                                                        if rrcount == 0:
+-                                                            status = True
+-                                                            returnstatus = 'BLACKLISTED'
+-                                                            blacklistname = rrname
+-                                                            break
++                                                    if rrdtype == 'CNAME':
++                                                        tag = 'CNAME-CLOAK'
++                                                    else:
++                                                        tag = '{0}-DATA'.format(rrdtype)
+ 
+-                                                        status = None
++                                                    status, hitdata = is_blacklisted(rrname, target, tag, False)
+ 
+-                                                    else:
+-                                                        if rrdtype not in ('A', 'AAAA'):
+-                                                            if config['log_hits'] and config['log_verbose']:
+-                                                                cloaklog='\"{0}\" -> \"{1}\"'.format(rrname, target)
+-                                                                if target != hitdata:
+-                                                                    cloaklog='{0} -> \"{1}\"'.format(cloaklog, hitdata)
++                                                if status is not None:
++                                                    if status is True: # Blacklisted
++                                                        if config['remove_ip'] and rrdtype in ('A', 'AAAA'): # Remove IP from answer instead of blocking whole
++                                                            rrset.remove(rr)
++                                                            rrcount = len(rrset)
++                                                            if config['log_verbose']:
++                                                                rlog = '\"{0}\" -> \"{1}\" ({2} RRs left)'.format(rrname, hitdata, rrcount)
+                                                                 if qname != rrname:
+-                                                                     cloaklog = '\"{0}\" -> {1}'.format(qname, cloaklog)
+-                                                                logging.warning('{0}-BLACKLIST-CLOAK-HIT: {1}'.format(rrdtype, cloaklog))
++                                                                    rlog = '\"{0}\" -> {1}'.format(qname, rlog)
++                                                                logging.warning('REMOVED-IP: {0} from {1} ({2})'.format(target, rlog, section))
++
++                                                            if rrcount == 0:
++                                                                status = True
++                                                                returnstatus = 'BLACKLISTED'
++                                                                blacklistname = rrname
++                                                                break
++
++                                                            status = None
++
++                                                        else:
++                                                            if rrdtype not in ('A', 'AAAA'):
++                                                                if config['log_hits'] and config['log_verbose']:
++                                                                    cloaklog='\"{0}\" -> \"{1}\"'.format(rrname, target)
++                                                                    if target != hitdata:
++                                                                        cloaklog='{0} -> \"{1}\"'.format(cloaklog, hitdata)
++                                                                    if qname != rrname:
++                                                                         cloaklog = '\"{0}\" -> {1}'.format(qname, cloaklog)
++                                                                    logging.warning('{0}-BLACKLIST-CLOAK-HIT: {1} ({2})'.format(rrdtype, cloaklog, section))
+ 
+-                                                        status = True
+-                                                        returnstatus = 'BLACKLISTED'
+-                                                        blacklistname = target
+-                                                        break
++                                                            status = True
++                                                            returnstatus = 'BLACKLISTED'
++                                                            blacklistname = target
++                                                            break
+ 
+-                                                else: # Whitelisted
+-                                                    status = False
+-                                                    returnstatus = 'WHITELISTED'
+-                                                    break
++                                                    else: # Whitelisted
++                                                        status = False
++                                                        returnstatus = 'WHITELISTED'
++                                                        break
+ 
+-                            else:
+-                                status = None
++                                else:
++                                    status = None
+ 
+-                            if status is not None or returnstatus != 'OK': # White or Blacklisted
+-                                break
++                                if status is not None or returnstatus != 'OK': # White or Blacklisted
++                                    break
+ 
+ 
+                 if status is True:
+@@ -2497,6 +2506,8 @@ def dox_request(qid, qname, rdtype, cachename, urls, rfc8484, cip):
+     while retries < 3 and (int(time.time()) - starttime < 10):
+         for url in filter(None, urls):
+             if url:
++                #logging.info('DOX-URL: {0}/{1} -> {2}'.format(qname, dns.rdatatype.to_text(rdtype), url))
++
+                 fastretry = False
+                 retries += 1
+ 
+@@ -2508,7 +2519,7 @@ def dox_request(qid, qname, rdtype, cachename, urls, rfc8484, cip):
+ 
+                     ips = False
+                     if af is not None:
+-                        cached = cache.get('{0}/443/GETADDRINFO'.format(url.split('/')[2]))
++                        cached = cache.get('{0}/{1}/GETADDRINFO'.format(url.split('/')[2], port))
+                         if cached:
+                             if af == 2:
+                                 ips = list(filter(is_ip4.search, list((map(lambda x: x[4][0], cached)))))
+@@ -2602,29 +2613,34 @@ def dox_request(qid, qname, rdtype, cachename, urls, rfc8484, cip):
+ 
+                 # TLS
+                 elif url.startswith('tls://'): # Port 853
+-                    servername = regex.sub('^' + regex.escape('tls://'), '', url)
+-                    if servername and servername.find('#') > -1:
+-                        servername, addr = servername.split('#')[0:2]
+-                        servername, port = '{0}{1}'.format(servername, '@853').split('@')[0:2]
+-                   
+-                        if addr and (af is None or ((af == 2 and is_ip4.search(addr)) or (af == 10 and is_ip6.search(addr)))):
+-                           if config['log_forwards']:
+-                               logging.info('DOT-QUERY [#{0}]: Query for {1}/IN/{2} to {3}@{4} ({5})'.format(retries, qname, dns.rdatatype.to_text(rdtype), servername, port, addr))
+-
+-                           response = False
+-                           try:
+-                               #response = dns.query.tls(message, addr, timeout=5, port=int(port), server_hostname=servername, af=af)
+-                               response = dns.query.tls(message, addr, timeout=5, port=int(port), server_hostname=servername)
+-
+-                           except BaseException as err:
+-                               logging.error('DOT-QUERY-ERROR: Query for {0}/IN/{1} to {2} - {3}'.format(qname, dns.rdatatype.to_text(rdtype), url, err))
+-
+-                           if response:
+-                               return response, response.rcode()
++                    servername, port = '{0}{1}'.format(regex.sub('^' + regex.escape('tls://'), '', url), '@853').split('@')[0:2]
++                    if servername and port:
++                        ips = False
++                        if af is not None:
++                            cached = cache.get('{0}/{1}/GETADDRINFO'.format(servername, port))
++                            if cached:
++                                if af == 2:
++                                    ips = list(filter(is_ip4.search, list((map(lambda x: x[4][0], cached)))))
++                                elif af == 10:
++                                    ips = list(filter(is_ip6.search, list((map(lambda x: x[4][0], cached)))))
++
++                        if ips:
++                            for addr in ips:
++                                if config['log_forwards']:
++                                    logging.info('DOT-QUERY [#{0}]: Query for {1}/IN/{2} to {3}@{4} ({5})'.format(retries, qname, dns.rdatatype.to_text(rdtype), servername, port, addr))
++
++                                    response = False
++                                    try:
++                                        response = dns.query.tls(message, addr, timeout=5, port=int(port), server_hostname=servername)
++
++                                    except BaseException as err:
++                                        logging.error('DOT-QUERY-ERROR: Query for {0}/IN/{1} to {2} - {3}'.format(qname, dns.rdatatype.to_text(rdtype), url, err))
++
++                                    if response:
++                                        return response, response.rcode()
+                         else:
+                             fastretry = True
+ 
+-
+                 # DNS
+                 else:
+                     addr = regex.sub('^' + regex.escape('dns://'), '', url)
+@@ -2745,7 +2761,6 @@ def geo(client_ip):
+         if cip.find(':') > -1:
+             ip6 = True
+ 
+-
+         response = geo_cache.get(cip, None)
+         if response:
+             return response
+@@ -2754,7 +2769,7 @@ def geo(client_ip):
+ 
+         if config['geodb'] and is_ip.search(cip):
+             if cip in ('0.0.0.0', '0000:0000:0000:0000:0000:0000:0000:0000'):
+-                response = '?/?/?/UNSPECIFIED'
++                response = '?/?/?/NULL'
+ 
+             elif cip in ('127.0.0.1', '0000:0000:0000:0000:0000:0000:0000:0001'):
+                 response = '?/?/?/LOCALHOST'
+@@ -2766,7 +2781,8 @@ def geo(client_ip):
+                 try:
+                     gip = geoip.city(cip)
+                     if gip:
+-                        #logging.info('GEOIP-DEBUG: {0} = ASN{1}'.format(cip, gip.traits.autonomous_system_number))
++                        #logging.info('GEOIP-DEBUG: {0} = G-ID:{1}/{2}/{3}/{4}'.format(cip, gip.city.geoname_id or 0, gip.subdivisions.most_specific.geoname_id or 0, gip.country.geoname_id or 0, gip.continent.geoname_id or 0))
++                        #logging.info('GEOIP-DEBUG: {0} = G-NAME:{1}/{2}/{3}/{4}'.format(cip, gip.city.name or '?', gip.subdivisions.most_specific.name or '?', gip.country.name or '?', gip.continent.name or '?'))
+                         response = regex.sub('[^a-zA-Z0-9\/\?]+', '', '{0}/{1}/{2}/{3}'.format(gip.city.name or '?', gip.subdivisions.most_specific.name or '?', gip.country.name or '?', gip.continent.name or '?')).upper()
+                 except:
+                     pass
+@@ -3097,8 +3113,8 @@ def run_server():
+ 
+     logging.info('SERVER: DeugNietS Starting on port {0}'.format(dnsport))
+ 
+-    udp_server4 = ThreadedUDPServer4(('127.0.0.1', dnsport), UDPHandler)
+-    udp_server6 = ThreadedUDPServer6(('::1', dnsport), UDPHandler)
++    udp_server4 = ThreadedUDPServer4(('0.0.0.0', dnsport), UDPHandler)
++    udp_server6 = ThreadedUDPServer6(('::', dnsport), UDPHandler)
+     udp_server_thread4 = threading.Thread(target=udp_server4.serve_forever)
+     udp_server_thread6 = threading.Thread(target=udp_server6.serve_forever)
+ 
+@@ -3190,10 +3206,14 @@ def run_server():
+             newentry = False
+             hostname = dnsserver
+             ips = False
++
+             if dnsserver.find('#') > -1:
+                 ips = regex.split('\s*,\s*', regex.split('\s*#\s*', dnsserver)[1])
+-                dnsserver = dnsserver.split('#')[0]
+-                hostname = dnsserver
++                dnsserver = regex.split('\s*#\s*', dnsserver)[0]
++
++            port = int('{0}@0'.format(dnsserver).split('@')[1])
++            dnsserver = dnsserver.split('@')[0]
++            hostname = dnsserver
+                 
+             if hostname.find('/') > -1:
+                 hostname = hostname.split('/')[2]
+@@ -3203,13 +3223,13 @@ def run_server():
+             #    config['force6'] = False
+ 
+             dox = 'DNS'
+-            aport = 53
++            aport = port or 53
+             if dnsserver.startswith('https://'):
+                 dox = 'HTTPS'
+-                aport = 443
++                aport = port or 443
+             elif dnsserver.startswith('tls://'):
+                 dox = 'TLS'
+-                aport = 853
++                aport = port or 853
+ 
+             # !!! Fix # addresses add
+             if dox != 'DNS':
+@@ -3236,6 +3256,7 @@ def run_server():
+                             logging.warning('{0}-SERVER-DISCARDED: {1} = BOOTSTRAP:{2} ({3})'.format(dox, dnsserver, ip, geo(ip)))
+ 
+                     if getaddrinfo:
++                        #logging.info('PRE-CACHE: {0}://{1}@{2} = {3}'.format(dox, hostname, aport, ', '.join(ips)))
+                         cachednshost = '{0}/{1}/GETADDRINFO'.format(hostname, aport)
+                         cache.add(obj=CachedObject(name=cachednshost, obj=getaddrinfo, ttl=604800)) # 7 Days
+ 
+@@ -3243,7 +3264,7 @@ def run_server():
+                     ips = list(map(lambda x: x[4][0], socket.getaddrinfo('{0}.'.format(hostname.rstrip('.')), aport, type=socket.SOCK_STREAM))) # Pre-cache
+ 
+                 logging.info('{0}-NAME-SERVER: {1}://{2}@{3} ({4})'.format(dox, dox.lower(), hostname, aport, ', '.join(ips)))
+-                newentry = dnsserver
++                newentry = '{0}://{1}@{2}'.format(dox.lower(), hostname, aport)
+             else:
+                 logging.info('{0}-NAME-SERVER: {1}://{2}@{3}'.format(dox, dox.lower(), hostname, aport))
+                 newentry = 'dns://{0}@{1}'.format(hostname, aport)
+@@ -3504,6 +3525,7 @@ if __name__ == '__main__':
+ 
+         # Whitelist Local/Private IPv4's
+         private4['127.0.0.0/8'] = 'Private'
++        private4['127.0.0.1/32'] = 'Private'
+         private4['10.0.0.0/8'] = 'Private'
+         private4['172.16.0.0/12'] = 'Private'
+         private4['192.168.0.0/16'] = 'Private'
+diff --git a/local.list.docker b/local.list.docker
+index 1425789..4bf3e76 100644
+--- a/local.list.docker
++++ b/local.list.docker
+@@ -17,16 +17,3 @@ duckduckgo.com = safe.duckduckgo.com
+ 
+ pixabay.com = safesearch.pixabay.com
+ 
+-# Selective Forwarders
+-fritz.box. > 192.168.1.1
+-1.168.192.in-addr.arpa.
+-
+-# Unfltering, When source IP or Queryname fits, all queries from source IP will be not filtered for unfilter_ttl time
+-+0::1
+-+127.0.0.1
+-+my.bank.nl
+-
+-# Allow/Block based on "word"
+-*fitbit
+-*sonos
+-
+diff --git a/requirements.txt b/requirements.txt
+index 64ba264..1d9d96e 100644
+--- a/requirements.txt
++++ b/requirements.txt
+@@ -7,6 +7,7 @@ geoip2>=2.9.0
+ idna>=2.8
+ ip2location>=8.4.1
+ IPy>=1.0
++netaddr>=0.7.19
+ pygtrie>=2.3.3
+ python-hosts>=0.4.7         
+ pytricia>=1.0.0

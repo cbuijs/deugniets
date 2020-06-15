@@ -1,0 +1,178 @@
+diff --git a/deugniets.py b/deugniets.py
+index 153fbc8..e4b725e 100644
+--- a/deugniets.py
++++ b/deugniets.py
+@@ -1,7 +1,7 @@
+ #!/usr/bin/env python3
+ '''
+ ===========================================================================
+- deugniets.py v2.765-20200311 Copyright 2019-2020 by cbuijs@chrisbuijs.com
++ deugniets.py v2.767-20200312 Copyright 2019-2020 by cbuijs@chrisbuijs.com
+ ===========================================================================
+ 
+  Based on: https://github.com/supriyo-biswas/adblock-dns-server
+@@ -1236,7 +1236,7 @@ def collapse(name, answer, qid):
+             if new_answer:
+                 if config['log_collapse']:
+                     if config['log_verbose']:
+-                        logging.info('COLLAPSE [{0}]: New \"{1}\" -> {2} ({3})'.format(qid, name, ', '.join(newaddrs), len(newaddrs)))
++                        logging.info('COLLAPSE [{0}]: Generated: \"{1}\" -> {2} ({3})'.format(qid, name, ', '.join(newaddrs), len(newaddrs)))
+                     logging.info('COLLAPSE [{0}]: \"{1}\" went from {2} to {3} RRs ({4})'.format(qid, name, beforecount, aftercount, removed))
+ 
+                 return new_answer
+@@ -1576,7 +1576,7 @@ def dns_query(name, rdclass, rdtype, qid, cip, unfilter, fttl):
+ 
+                         if rv is not None:
+                             returnstatus = 'SPOOFED'
+-                            soa = dns.rrset.from_text(match, config['spoof_ttl'], 'IN', 6, "spoofed.{0} {1}.{2}. 1 60 60 60 60".format(qname, qrdtype.lower(), spoof.rstrip('.').lower()))
++                            soa = dns.rrset.from_text(match, config['spoof_ttl'], 'IN', 6, "spoofed.{0} {1}.{2}. {3} 60 60 60 60".format(qname, qrdtype.lower(), spoof.rstrip('.').lower(), int(time.time())))
+                             rv = (rv[0], rv[1], [soa], rv[3])
+ 
+                         else:
+@@ -1690,10 +1690,12 @@ def dns_query(name, rdclass, rdtype, qid, cip, unfilter, fttl):
+ 
+                                         if is_formerr('RESPONSE', target, rdtype):
+                                             status = True
++                                            returnstatus = 'BLACKLISTED'
+                                             blacklistname = target
+                                             break
+                                         elif is_ip.search(target) and (config['redirect_ip'] and target in config['redirect_ip']):
+                                             logging.warning('REDIRECT-IP-HIT: {0} -> {1}'.format(rrname, target))
++                                            status = False
+                                             returnstatus = 'WHITELISTED'
+                                             break
+                                         else:
+@@ -1712,19 +1714,22 @@ def dns_query(name, rdclass, rdtype, qid, cip, unfilter, fttl):
+                                                     if config['remove_ip'] and rdtype in ('A', 'AAAA'): # Remove IP from answer instead of blocking whole
+                                                         rrset.remove(rr)
+                                                         rrcount = len(rrset)
+-                                                        logging.warning('REMOVED-IP: Removed {0} from {1} ({2} left)'.format(target, rrname, rrcount))
++                                                        logging.warning('REMOVED-IP: {0} ({1}) from \"{2}\" ({3} RRs left)'.format(target, geo(target), rrname, rrcount))
+                                                         if rrcount == 0:
++                                                            status = True
+                                                             returnstatus = 'BLACKLISTED'
+-                                                            blacklistname = target
++                                                            blacklistname = rrname
+                                                             break
+ 
+                                                         status = None
+ 
+                                                     else:
++                                                        status = True
+                                                         returnstatus = 'BLACKLISTED'
+                                                         blacklistname = target
+                                                         break
+                                                 else: # Whitelisted
++                                                    status = False
+                                                     returnstatus = 'WHITELISTED'
+                                                     break
+ 
+@@ -1734,18 +1739,15 @@ def dns_query(name, rdclass, rdtype, qid, cip, unfilter, fttl):
+                             if status is not None or returnstatus != 'OK': # White or Blacklisted
+                                 break
+ 
++
++                if status is True:
++                    returnstatus = 'BLACKLISTED'
++                    rv = (config['blacklist_rcode'], [], [], [])
+                 else:
+-                    status = None
+                     response.answer = normttl(qname, response.answer, qid, fttl)
+-                    #response.authority = normttl(qname, response.authority, qid, fttl)
+-                    #response.additional = normttl(qname, response.additional, qid, fttl)
+-
+-                if status is not True:
+                     response.answer = collapse(qname, response.answer, qid)
+                     rv = (response.rcode(), response.answer, response.authority, response.additional)
+-                else:
+-                    returnstatus = 'BLACKLISTED'
+-                    rv = (config['blacklist_rcode'], [], [], [])
++
+ 
+         else:
+             logging.error('REQUEST-ERROR: {0} = SERVFAIL - Empty Response'.format(cachename))
+@@ -1767,6 +1769,8 @@ def dns_query(name, rdclass, rdtype, qid, cip, unfilter, fttl):
+             rcode = dns.rcode.NOERROR
+             rv = (dns.rcode.NOERROR, [], [], [])
+ 
++        rcode = rv[0]
++
+         # TTL
+         ttl = False
+         if rcode == dns.rcode.NOERROR:
+@@ -1796,39 +1800,32 @@ def dns_query(name, rdclass, rdtype, qid, cip, unfilter, fttl):
+         else:
+             ttl = config['min_ttl']
+ 
+-        rcode = rv[0]
+-
+         if returnstatus == 'BLACKLISTED':
+-            rcode = config['blacklist_rcode']
+-
+             tag = 'blocked'
+             if qname.strip('.') != blacklistname.strip('.'):
+                  tag = '{0}.cloaked'.format(tag)
+                  
+-            soa = dns.rrset.from_text(qname, ttl, 'IN', 6, "{0}.{1} {2}.{3}. 1 60 60 60 60".format(tag, qname, qrdtype.lower(), blacklistname.strip('.')))
++            soa = dns.rrset.from_text(qname, ttl, 'IN', 6, "{0}.{1} {2}.{3}. {4} 60 60 60 60".format(tag, qname, qrdtype.lower(), blacklistname.strip('.'), int(time.time())))
+ 
+-            if rcode in (0, 3):
+-                newrv = False
++            newrv = False
++            if rdtype in (1, 5) and config['redirect_ip']: # A or CNAME
++                ip4 = list(filter(is_ip4.search, config['redirect_ip']))
++                if ip4:
++                    newrv = (dns.rcode.NOERROR, [dns.rrset.from_text_list(qname, ttl, 'IN', 1, ip4)], [soa], [])
+ 
+-                if rcode == 0:
+-                    if rdtype in (1, 5) and config['redirect_ip']: # A or CNAME
+-                        ip4 = list(filter(is_ip4.search, config['redirect_ip']))
+-                        if ip4:
+-                            newrv = (dns.rcode.NOERROR, [dns.rrset.from_text_list(qname, ttl, 'IN', 1, ip4)], [soa], [])
++            elif rdtype in (5, 28) and config['redirect_ip']: # CNAME or AAAA
++                ip6 = list(filter(is_ip6.search, config['redirect_ip']))
++                if ip6:
++                   newrv = (dns.rcode.NOERROR, [dns.rrset.from_text_list(qname, ttl, 'IN', 28, ip6)], [soa], [])
+ 
+-                    elif rdtype in (5, 28) and config['redirect_ip']: # CNAME or AAAA
+-                        ip6 = list(filter(is_ip6.search, config['redirect_ip']))
+-                        if ip6:
+-                            newrv = (dns.rcode.NOERROR, [dns.rrset.from_text_list(qname, ttl, 'IN', 28, ip6)], [soa], [])
++            elif rdtype == 16: # TXT
++                newrv = (dns.rcode.NOERROR, [dns.rrset.from_text(qname, ttl, 'IN', 16, 'Blacklisted!')], [soa], [])
+ 
+-                    elif rdtype == 16: # TXT
+-                        newrv = (dns.rcode.NOERROR, [dns.rrset.from_text(qname, ttl, 'IN', 16, 'Blacklisted!')], [soa], [])
++            else:
++                newrv = (config['blacklist_rcode'], [], [soa], [])
+                 
+-                if newrv:
+-                    rv = newrv
+-
+-            if len(rv[2]) < 1 and rcode in (0, 3, 5): # No SOA and NOERROR/NXDOMAIN/REFUSED
+-                rv = (rcode, [], [soa], [])
++            if newrv:
++                rv = newrv
+ 
+         if ttl and ttl > 0:
+             # All TTLs the same
+@@ -2327,9 +2324,16 @@ def handle_query(raw_data, client_ip):
+ 
+         result = dns_query(name, rdclass, rdtype, query.id, cip, unfilter, False)
+ 
+-    if config['min_resp'] and result[0] == 0:
+-        logging.info('MINIMAL-RESPONSE [{0}]: {1} - Removed Authoritative/Additional'.format(query.id, queryname))
+-        result = (result[0], result[1], [], [])
++
++    if config['min_resp']:
++        if result[0] == 0:
++            if result[1]:
++                result = (result[0], result[1], [], [])
++            else:
++                result = (dns.rcode.NXDOMAIN, [], result[2], [])
++        else:
++            result = (result[0], [], result[2], [])
++
+ 
+     response = make_response(query)
+     response.set_rcode(result[0]) or dns.rcode.SERVFAIL

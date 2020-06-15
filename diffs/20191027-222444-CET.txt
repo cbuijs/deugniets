@@ -1,0 +1,100 @@
+diff --git a/deugniets.conf b/deugniets.conf
+index d68f21a..e891043 100644
+--- a/deugniets.conf
++++ b/deugniets.conf
+@@ -119,5 +119,5 @@ optimize = false
+ #blacklist = ["/opt/accomplist/chris/regex.black", "/opt/accomplist/deugniets/plain.black.regex.list", "/opt/accomplist/deugniets/optimized.black.domain.list", "/opt/accomplist/deugniets/plain.black.ip4cidr.list", "/opt/accomplist/deugniets/plain.black.ip6cidr.list"]
+ 
+ whitelist = ["/opt/deugniets/alias.list", "/opt/deugniets/doh.alias.list", "/opt/accomplist/chris/connectivity-check.list", "/opt/accomplist/dnsdist/deugniets.white.list", "/opt/accomplist/chris/white.special", "/opt/accomplist/chris/private-addresses.list"]
+-blacklist = ["/opt/deugniets/black.list", "/opt/accomplist/dnsdist/deugniets.black.list","/opt/accomplist/family-safe/deugniets.black.list", "/opt/accomplist/malicious-ip/deugniets.black.list"]
++blacklist = ["/opt/deugniets/black.list", "/opt/accomplist/dnsdist/deugniets.black.list","/opt/accomplist/family-safe/deugniets.black.list", "/opt/accomplist/malicious-ip/deugniets.black.list", "/opt/accomplist/testip.list"]
+ 
+diff --git a/deugniets.py b/deugniets.py
+index 69d09ed..59e43f4 100644
+--- a/deugniets.py
++++ b/deugniets.py
+@@ -1,7 +1,7 @@
+ #!/usr/bin/env python3
+ '''
+ =======================================================================
+- deugniets.py v2.384-20191025 Copyright 2019 by cbuijs@chrisbuijs.com
++ deugniets.py v2.39-20191027 Copyright 2019 by cbuijs@chrisbuijs.com
+ =======================================================================
+ 
+  Based on: https://github.com/supriyo-biswas/adblock-dns-server
+@@ -71,8 +71,8 @@ import requests
+ # Use module PyTricia for CIDR/Subnet stuff
+ import pytricia
+ 
+-# Use IPSet from IPy to aggregate
+-from IPy import IP, IPSet
++# IPy IP
++from IPy import IP
+ 
+ # Sequencematcher
+ #from difflib import SequenceMatcher
+@@ -300,35 +300,34 @@ def unip(iplist1, iplist2, ip6, listname, allowsame):
+         aftercount = len(newiplist)
+         logging.info('UNIP-{0} [{1}]: Went from {2} to {3} entries ({4})'.format(fam, listname, beforecount, aftercount, aftercount - beforecount))
+ 
+-        for ip in agg_ip(newiplist, listname, fam):
+-            newiplist2[ip] = newiplist[ip]
+-
+-        return newiplist2
++        return agg_ip(newiplist, listname, fam)
+ 
+     return iplist1
+         
+ 
++# Aggregate IP list
+ def agg_ip(iplist, listname, fam):
+     logging.info('AGGREGATE-{0}-[{1}]: Aggregating List ...'.format(fam, listname))
+-    ipset = IPSet()
+-    for ip in iplist:
+-        ipset.add(IP(ip))
+ 
+-    #ips = list()
+-    #for ip in iplist:
+-    #    ips.append(IP(ip))
+-    #ipset = IPSet(ips) # Here is the magic
++    if fam == 'IPV4':
++        new = pytricia.PyTricia(32)
++    else:
++        new = pytricia.PyTricia(128)
++
++    lastip = 'None'
+ 
+-    newlist = list()
+-    for ip in ipset:
+-        ip.NoPrefixForSingleIp = None
+-        newlist.append(ip.strNormal(1))
++    for ip in iplist:
++        if iplist.get_key(ip) == ip and (not ip in new):
++            new[ip] = iplist[ip]
++            lastip = ip
++        else:
++            logging.info('AGGREGATE-{0}-[{1}]: Removed {2} due to parent {3}'.format(fam, listname, ip, lastip))
+ 
+     beforecount = len(iplist)
+-    aftercount = len(newlist)
++    aftercount = len(new)
+     logging.info('AGGREGATE-{0}-[{1}]: Went from {2} to {3} entries ({4})'.format(fam, listname, beforecount, aftercount, aftercount - beforecount))
+ 
+-    return newlist
++    return new
+ 
+ 
+ def make_doms(domlist):
+diff --git a/doh.alias.list b/doh.alias.list
+index de4206d..e0434fc 100644
+--- a/doh.alias.list
++++ b/doh.alias.list
+@@ -37,6 +37,8 @@ dns.google.com = 192.168.1.32, 2001:981:1759:1::32
+ google-public-dns-a.google.com = 192.168.1.32, 2001:981:1759:1::32
+ google-public-dns-b.google.com = 192.168.1.32, 2001:981:1759:1::32
+ doh.li = 192.168.1.32, 2001:981:1759:1::32
++doh.libredns.gr = 192.168.1.32, 2001:981:1759:1::32
++dot.libredns.gr = 192.168.1.32, 2001:981:1759:1::32
+ doh.netweaver.uk = 192.168.1.32, 2001:981:1759:1::32
+ dns.neutopia.org = 192.168.1.32, 2001:981:1759:1::32
+ dns.nextdns.io = 192.168.1.32, 2001:981:1759:1::32

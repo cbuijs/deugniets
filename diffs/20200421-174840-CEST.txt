@@ -1,0 +1,156 @@
+diff --git a/deugniets.py b/deugniets.py
+index cd654f9..d03707e 100644
+--- a/deugniets.py
++++ b/deugniets.py
+@@ -1,7 +1,7 @@
+ #!/usr/bin/env python3
+ '''
+ ===========================================================================
+- deugniets.py v2.835-20200421 Copyright 2019-2020 by cbuijs@chrisbuijs.com
++ deugniets.py v2.861-20200421 Copyright 2019-2020 by cbuijs@chrisbuijs.com
+ ===========================================================================
+ 
+  Based on: https://github.com/supriyo-biswas/adblock-dns-server
+@@ -222,7 +222,7 @@ is_dox4 = regex.compile('^(dn|http|tl)s://(do[ht]|ip(v)*)4\..*$', regex.I)
+ is_dox6 = regex.compile('^(dn|http|tl)s://(do[ht]|ip(v)*)6\..*$', regex.I)
+ 
+ # GEO
+-is_geo = regex.compile('^@[a-z/\:\s]+$', regex.I)
++is_geo = regex.compile('^@[a-z\/\:\s]+$', regex.I)
+ 
+ # Regex
+ is_regex = regex.compile('^/.*/$', regex.I)
+@@ -511,7 +511,8 @@ def read_list(filenames, listname, domlst, ip4lst, ip6lst, rxlst, unlst, unip4,
+                     if loc:
+                         geolst['{0}:{1}'.format(loc, regex.sub('[^a-zA-Z0-9]+', '', entry.upper()))] = entry
+                     else:
+-                        geolst[regex.sub('[^a-zA-Z0-9]+', '', entry.upper())] = entry
++                        geolst[regex.sub('[^a-zA-Z0-9\/]+', '', entry.upper())] = entry
++
+ 
+             if ftype is False or ftype == 'ALIAS':
+                 logging.info('PROCESS-LIST ({0}): Getting ALIASes...'.format(lname))
+@@ -748,6 +749,9 @@ def rev_ip(ip, delimiter):
+ 
+ def expand_ip(ip):
+     '''Expand IPv6 addresses'''
++    return str(IP(str(ip)).strFullsize())
++
++    # !!!! Remove below
+     ip = str(ip)
+     if not is_ip6.search(ip):
+         return ip
+@@ -778,6 +782,11 @@ def expand_ip(ip):
+     return new_ip
+ 
+ 
++def compress_ip(ip):
++    '''Compress IPv6 addresses'''
++    return str(IP(str(ip)).strCompressed())
++
++
+ # DO SOMETHING WITH THIS !!!!
+ def is_formerr(rtype, value, qtype):
+     '''Check if weird'''
+@@ -1144,33 +1153,51 @@ def check_ip(valuetype, testvalue, orgtestvalue, iplist, listname, rc):
+ 
+ 
+ def check_geo(valuetype, testvalue, geolst, listname):
+-    if config['geodb']:
+-        #logging.debug('{0}-CHECK-GEO [{1}]: {2}'.format(valuetype, listname, testvalue))
+-        giploc = geo(testvalue)
+-        if giploc:
+-            city, area, country, continent = tuple(giploc.split('/')[0:4])
++    #logging.debug('{0}-CHECK-GEO [{1}]: {2}'.format(valuetype, listname, testvalue))
++    giploc = '?/?/?/?/{0}'.format(geo(testvalue))
++    if giploc:
++        city, area, country, continent = tuple(giploc.split('/')[-4:])
+ 
+-            # !!! Make nicer/quicker
+-            if continent in geolst or 'CONTINENT:{0}'.format(continent) in geolst:
+-                if config['log_hits'] and config['log_verbose'] and listname:
+-                    logging.warning('{0}-GEO-CONTINENT-HIT [{1}]: {2} -> {3} ({4})'.format(valuetype, listname, testvalue, continent, giploc))
+-                return True
++        giploc = giploc.lstrip('?/')
+ 
+-            if country in geolst or 'COUNTRY:{0}'.format(country) in geolst:
+-                if config['log_hits'] and config['log_verbose'] and listname:
+-                    logging.warning('{0}-GEO-COUNTRY-HIT [{1}]: {2} -> {3} ({4})'.format(valuetype, listname, testvalue, country, giploc))
+-                return True
++        # !!! Make nicer/quicker
++        if continent in geolst or 'CONTINENT:{0}'.format(continent) in geolst:
++            if config['log_hits'] and config['log_verbose'] and listname:
++                logging.warning('{0}-GEO-CONTINENT-HIT [{1}]: {2} -> {3} ({4})'.format(valuetype, listname, testvalue, continent, giploc))
++            return True
+ 
+-            if area in geolst or 'AREA:{0}'.format(area) in geolst:
+-                if config['log_hits'] and config['log_verbose'] and listname:
+-                    logging.warning('{0}-GEO-AREA-HIT [{1}]: {2} -> {3} ({4})'.format(valuetype, listname, testvalue, area, giploc))
+-                return True
++        if country in geolst or 'COUNTRY:{0}'.format(country) in geolst:
++            if config['log_hits'] and config['log_verbose'] and listname:
++                logging.warning('{0}-GEO-COUNTRY-HIT [{1}]: {2} -> {3} ({4})'.format(valuetype, listname, testvalue, country, giploc))
++            return True
++
++        if area in geolst or 'AREA:{0}'.format(area) in geolst:
++            if config['log_hits'] and config['log_verbose'] and listname:
++                logging.warning('{0}-GEO-AREA-HIT [{1}]: {2} -> {3} ({4})'.format(valuetype, listname, testvalue, area, giploc))
++            return True
++
++        if city in geolst or 'CITY:{0}'.format(city) in geolst:
++            if config['log_hits'] and config['log_verbose'] and listname:
++                logging.warning('{0}-GEO-CITY-HIT [{1}]: {2} -> {3} ({4})'.format(valuetype, listname, testvalue, city, giploc))
++            return True
++
++        # Multiples
++        glist = [continent, country, area, city]
++        gcheck = False
++        for label in glist:
++            if label == '?':
++                break
++
++            if gcheck:
++                gcheck = '{0}/{1}'.format(label, gcheck)
++            else:
++                gcheck = label
+ 
+-            if city in geolst or 'CITY:{0}'.format(city) in geolst:
++            if gcheck in geolst:
+                 if config['log_hits'] and config['log_verbose'] and listname:
+-                    logging.warning('{0}-GEO-CITY-HIT [{1}]: {2} -> {3} ({4})'.format(valuetype, listname, testvalue, city, giploc))
++                    logging.warning('{0}-GEO-HIT [{1}]: {2} -> {3}'.format(valuetype, listname, testvalue, gcheck))
+                 return True
+-
++        
+     return False
+ 
+ 
+@@ -2277,7 +2304,7 @@ def log_response(qname, qtype, answer, rcode, tag, spoofedname, qid):
+                                 logging.info('{0} [{1}:{2}/{3}-{4}/{5}#{6}]: {7} {8} IN {9} {10} (COLLAPSE-CANDIDATE)'.format(tag, qid, rrsetcount, rrsetcounttotal, rrcount, rrcounttotal, count, rrset.name, rrset.ttl, rdtype, rr))
+                             else:
+                                 if rdtype in ('A', 'AAAA'):
+-                                    logging.info('{0} [{1}:{2}/{3}-{4}/{5}#{6}]: {7} {8} IN {9} {10} ({11})'.format(tag, qid, rrsetcount, rrsetcounttotal, rrcount, rrcounttotal, count, rrset.name, rrset.ttl, rdtype, expand_ip(rr), geo(rr)))
++                                    logging.info('{0} [{1}:{2}/{3}-{4}/{5}#{6}]: {7} {8} IN {9} {10} ({11})'.format(tag, qid, rrsetcount, rrsetcounttotal, rrcount, rrcounttotal, count, rrset.name, rrset.ttl, rdtype, compress_ip(rr), geo(rr)))
+                                 else:
+                                     logging.info('{0} [{1}:{2}/{3}-{4}/{5}#{6}]: {7} {8} IN {9} {10}'.format(tag, qid, rrsetcount, rrsetcounttotal, rrcount, rrcounttotal, count, rrset.name, rrset.ttl, rdtype, rr))
+ 
+@@ -2327,7 +2354,9 @@ def geo(client_ip):
+                     pass
+ 
+         if response == '?/?/?/?':
+-            response = '?/?/?/UNKNOWN'
++            response = 'UNKNOWN'
++        else:
++            response = response.lstrip('?/')
+ 
+         geo_cache[cip] = response
+         return response
+@@ -2453,7 +2482,7 @@ def handle_query(raw_data, client_ip):
+ 
+     #logging.debug('RESPONSE-FLAGS-TO-CLIENT [{0}]: {1}'.format(query.id, dns.flags.to_text(response.flags)))
+ 
+-    log_helper(name, rdtypet, (result[0], result[1], result[2], result[3], status), 'RESPONSE-TO-CLIENT ({0})'.format(cip), query.id)
++    log_helper(name, rdtypet, (result[0], result[1], result[2], result[3], status), 'RESPONSE-TO-CLIENT ({0})'.format(compress_ip(cip)), query.id)
+ 
+     beingchecked.discard(bname)
+ 

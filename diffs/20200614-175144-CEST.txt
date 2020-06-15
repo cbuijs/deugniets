@@ -1,0 +1,102 @@
+diff --git a/deugniets.py b/deugniets.py
+index 05349df..a5f034b 100644
+--- a/deugniets.py
++++ b/deugniets.py
+@@ -1,7 +1,7 @@
+ #!/usr/bin/env python3
+ '''
+ ===========================================================================
+- deugniets.py v3.262-20200612 Copyright 2019-2020 by cbuijs@chrisbuijs.com
++ deugniets.py v3.267-20200613 Copyright 2019-2020 by cbuijs@chrisbuijs.com
+ ===========================================================================
+ 
+  Based on: https://github.com/supriyo-biswas/adblock-dns-server
+@@ -2866,7 +2866,7 @@ def handle_query(raw_data, client_ip):
+ 
+     #logging.debug('GEO-IP: {0} - {1}'.format(client_ip, geo(client_ip)))
+ 
+-    if check_badip(cip):
++    if config['block_clients'] and check_badip(cip):
+         logging.warning('DROP-CLIENT: {0} requesting {1}/{2}/{3} from {4}'.format(compress_ip(cip), name, rdtypet, rdclasst, geo(cip)))
+         return None # DROP
+ 
+@@ -3206,7 +3206,7 @@ def run_server():
+                             tag = 'IPV4'
+                             wl_ip4[ip] = 'NEXTDNS-Server'
+ 
+-                        if not check_badip(ip):
++                        if config['block_clients'] and not check_badip(cip):
+                             if tag == 'IPV6':
+                                 getaddrinfo.append((10, 1, 6, '', (ip, 443, 0, 0)))
+                             else:
+@@ -3281,7 +3281,7 @@ def run_server():
+                             tag = 'IPV4'
+                             wl_ip4[ip] = '{0}-Server'.format(dox)
+ 
+-                        if not check_badip(ip):
++                        if config['block_clients'] and not check_badip(ip):
+                             if tag == 'IPV6':
+                                 getaddrinfo.append((10, 1, 6, '', (ip, aport, 0, 0)))
+                             else:
+@@ -3412,6 +3412,7 @@ if __name__ == '__main__':
+     config['check_iprev'] = False
+     config['remove_ip'] = True
+     config['block_specific'] = True # Block specific domains even when TLD is whitelisted
++    config['block_clients'] = False
+ 
+     # 0x20 encoding
+     config['0x20'] = False
+@@ -3421,6 +3422,7 @@ if __name__ == '__main__':
+     config['blacklist'] = ['black.list']
+     config['private_addrs'] = []
+     config['optimize'] = True
++    config['optimize_mode'] = 1 # 0 = None, 1 = Light/Undup, 2 = Full
+ 
+     # Logging
+     config['log_requests'] = True
+@@ -3600,28 +3602,28 @@ if __name__ == '__main__':
+             wl_ip6[ip] = private6[ip]
+ 
+         if config['optimize']:
+-            wl_dom = undom(wl_dom, wl_dom, 'WHITELIST-WHITELIST', True)
+-            bl_dom = undom(bl_dom, bl_dom, 'BLACKLIST-BLACKLIST', True)
+-            bl_dom = undom(bl_dom, wl_dom, 'BLACKLIST-WHITELIST', False)
++            if config['optimize_mode'] > 0: wl_dom = undom(wl_dom, wl_dom, 'WHITELIST-WHITELIST', True)
++            if config['optimize_mode'] > 0: bl_dom = undom(bl_dom, bl_dom, 'BLACKLIST-BLACKLIST', True)
++            if config['optimize_mode'] > 1: bl_dom = undom(bl_dom, wl_dom, 'BLACKLIST-WHITELIST', False)
+ 
+-            ul_dom = undom(ul_dom, ul_dom, 'UNFILTER-UNFILTER', True)
+-            ul_ip4 = unip(ul_ip4, ul_ip4, False, 'UNFILTER-UNFILTER', True)
+-            ul_ip6 = unip(ul_ip6, ul_ip6, True, 'UNFILTER-UNFILTER', True)
++            if config['optimize_mode'] > 0: l_dom = undom(ul_dom, ul_dom, 'UNFILTER-UNFILTER', True)
++            if config['optimize_mode'] > 0: ul_ip4 = unip(ul_ip4, ul_ip4, False, 'UNFILTER-UNFILTER', True)
++            if config['optimize_mode'] > 0: ul_ip6 = unip(ul_ip6, ul_ip6, True, 'UNFILTER-UNFILTER', True)
+ 
+-            wl_dom = undom(wl_dom, ul_dom, 'WHITELIST-UNFILTER', True)
+-            bl_dom = undom(bl_dom, ul_dom, 'BLACKLIST-UNFILTER', True)
++            if config['optimize_mode'] > 1: wl_dom = undom(wl_dom, ul_dom, 'WHITELIST-UNFILTER', True)
++            if config['optimize_mode'] > 1: bl_dom = undom(bl_dom, ul_dom, 'BLACKLIST-UNFILTER', True)
+ 
+-            wl_dom = unreg(wl_dom, wl_big_rx, 'WHITELIST-WHITELIST')
+-            bl_dom = unreg(bl_dom, bl_big_rx, 'BLACKLIST-BLACKLIST')
+-            bl_dom = unreg(bl_dom, wl_big_rx, 'BLACKLIST-WHITELIST')
++            if config['optimize_mode'] > 1: wl_dom = unreg(wl_dom, wl_big_rx, 'WHITELIST-WHITELIST')
++            if config['optimize_mode'] > 1: bl_dom = unreg(bl_dom, bl_big_rx, 'BLACKLIST-BLACKLIST')
++            if config['optimize_mode'] > 1: bl_dom = unreg(bl_dom, wl_big_rx, 'BLACKLIST-WHITELIST')
+ 
+-            wl_ip4 = unip(wl_ip4, wl_ip4, False, 'WHITELIST-WHITELIST', True)
+-            bl_ip4 = unip(bl_ip4, bl_ip4, False, 'BLACKLIST-BLACKLIST', True)
+-            bl_ip4 = unip(bl_ip4, wl_ip4, False, 'BLACKLIST-WHITELIST', False)
++            if config['optimize_mode'] > 0: wl_ip4 = unip(wl_ip4, wl_ip4, False, 'WHITELIST-WHITELIST', True)
++            if config['optimize_mode'] > 0: bl_ip4 = unip(bl_ip4, bl_ip4, False, 'BLACKLIST-BLACKLIST', True)
++            if config['optimize_mode'] > 1: bl_ip4 = unip(bl_ip4, wl_ip4, False, 'BLACKLIST-WHITELIST', False)
+ 
+-            wl_ip6 = unip(wl_ip6, wl_ip6, True, 'WHITELIST-WHITELIST', True)
+-            bl_ip6 = unip(bl_ip6, bl_ip6, True, 'BLACKLIST-BLACKLIST', True)
+-            bl_ip6 = unip(bl_ip6, wl_ip6, True, 'BLACKLIST-WHITELIST', False)
++            if config['optimize_mode'] > 0: wl_ip6 = unip(wl_ip6, wl_ip6, True, 'WHITELIST-WHITELIST', True)
++            if config['optimize_mode'] > 0: bl_ip6 = unip(bl_ip6, bl_ip6, True, 'BLACKLIST-BLACKLIST', True)
++            if config['optimize_mode'] > 1: bl_ip6 = unip(bl_ip6, wl_ip6, True, 'BLACKLIST-WHITELIST', False)
+ 
+ 
+         if len(wl_rx) + len(bl_rx) == 0:

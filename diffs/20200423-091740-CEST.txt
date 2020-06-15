@@ -1,0 +1,111 @@
+diff --git a/deugniets.py b/deugniets.py
+index 33a1ae4..c001bd6 100644
+--- a/deugniets.py
++++ b/deugniets.py
+@@ -1,7 +1,7 @@
+ #!/usr/bin/env python3
+ '''
+ ===========================================================================
+- deugniets.py v2.891-20200422 Copyright 2019-2020 by cbuijs@chrisbuijs.com
++ deugniets.py v2.895-20200423 Copyright 2019-2020 by cbuijs@chrisbuijs.com
+ ===========================================================================
+ 
+  Based on: https://github.com/supriyo-biswas/adblock-dns-server
+@@ -926,8 +926,9 @@ def check_blacklisted(testvalue, valuetype, checkip):
+                 return True
+ 
+             if config['smartdoms'] and check_dom_smart('WHITELIST', testvalue, bl_dom, 'BLACKLIST', True):
++                #if check_dom_smart('WHITELIST', qname, alias, 'ALIAS', True):
++                #    return False
+                 return True
+-
+             return False
+ 
+         if check_rx(valuetype, orgtestvalue, wl_rx, wl_big_rx, 'WHITELIST'):
+@@ -944,6 +945,8 @@ def check_blacklisted(testvalue, valuetype, checkip):
+                 return True
+ 
+         if check_dom(valuetype, testvalue, bl_dom, 'BLACKLIST', False, config['smartdoms']): # Blacklisted
++            if config['smartdoms'] and check_dom_smart('BLACKLIST', testvalue, alias, 'ALIAS', True):
++                return False
+             return True
+ 
+         if check_rx(valuetype, orgtestvalue, bl_rx, bl_big_rx, 'BLACKLIST'):
+@@ -1595,35 +1598,44 @@ def dns_query(name, rdclass, rdtype, qid, cip, unfilter, fttl):
+                 break
+ 
+ 
++    matcha = False
+     matchf = check_dom('NAME', qname, forwarder, 'FORWARDER', False, False)
+     if matchf and config['smartdoms'] and check_dom_smart('FORWARDER', qname, bl_dom, 'BLACKLIST', True):
+         matchf = False
++        if config['smartdoms']:
++            matcha = check_dom_smart('FORWARDER', qname, alias, 'ALIAS', True)
+ 
+-    if rv is None and config['filtering'] and config['filter_request'] and unfilter is False and matchf is False:
+-        #logging.debug('REQUEST-QNAME-CHECK [{0}]: {1}'.format(qid, qname))
+-
+-        wmatch = is_blacklisted(qname, 'NAME', False) # Due first, faster due to caching of previous results
+-        if wmatch is True:
++        if matcha is False:
+             blacklistname = qname
+             returnstatus = 'BLACKLISTED'
+             rv = (config['blacklist_rcode'], [], [], [])
+ 
+-        elif wmatch is False:
+-            returnstatus = 'WHITELISTED'
++    if rv is None and config['filtering'] and config['filter_request'] and unfilter is False and matchf is False:
++        if matcha is False:
++            #logging.debug('REQUEST-QNAME-CHECK [{0}]: {1}'.format(qid, qname))
+ 
+-        elif config['blockip4'] and (qrdtype == 'A' or qname.endswith('.in-addr.arpa.')):
+-            returnstatus = 'BLACKLISTED'
+-            if config['log_hits']:
+-                logging.warning('REQUEST-IPV4-HIT [{0}]: {1}'.format(qid, cachename))
+-            rv = (config['blacklist_rcode'], [], [], [])
++            wmatch = is_blacklisted(qname, 'NAME', False) # Due first, faster due to caching of previous results
++            if wmatch is True:
++                blacklistname = qname
++                returnstatus = 'BLACKLISTED'
++                rv = (config['blacklist_rcode'], [], [], [])
+ 
+-        elif config['blockip6'] and (qrdtype == 'AAAA' or qname.endswith('.ip6.arpa.')):
+-            returnstatus = 'BLACKLISTED'
+-            if config['log_hits']:
+-                 logging.warning('REQUEST-IPV6-HIT [{0}]: {1}'.format(qid, cachename))
++            elif wmatch is False:
++                returnstatus = 'WHITELISTED'
+ 
+-            #rv = (dns.rcode.NOERROR, [], [], []) # Workaround for searchdomains
+-            rv = (config['blacklist_rcode'], [], [], [])
++            elif config['blockip4'] and (qrdtype == 'A' or qname.endswith('.in-addr.arpa.')):
++                returnstatus = 'BLACKLISTED'
++                if config['log_hits']:
++                    logging.warning('REQUEST-IPV4-HIT [{0}]: {1}'.format(qid, cachename))
++                rv = (config['blacklist_rcode'], [], [], [])
++
++            elif config['blockip6'] and (qrdtype == 'AAAA' or qname.endswith('.ip6.arpa.')):
++                returnstatus = 'BLACKLISTED'
++                if config['log_hits']:
++                     logging.warning('REQUEST-IPV6-HIT [{0}]: {1}'.format(qid, cachename))
++
++                #rv = (dns.rcode.NOERROR, [], [], []) # Workaround for searchdomains
++                rv = (config['blacklist_rcode'], [], [], [])
+ 
+         ip6 = None
+         if is_ip.search(cip):
+@@ -1633,7 +1645,13 @@ def dns_query(name, rdclass, rdtype, qid, cip, unfilter, fttl):
+                 ip6 = False
+ 
+         if rv is None and (qrdtype in ('A', 'AAAA', 'CNAME')) and ((ip6 is False and cip in private4) or (ip6 is True and cip in private6)):
+-            match = check_dom('NAME', qname, alias, 'ALIAS', False, False)
++            if matcha:
++                match = matcha
++            else:
++                match = check_dom('NAME', qname, alias, 'ALIAS', False, False)
++                if match is False and config['smartdoms']:
++                    match = check_dom_smart('ALIAS', qname, alias, 'ALIAS', True)
++
+             if match:
+                 spoof = alias[match]
+                 if spoof != qname:

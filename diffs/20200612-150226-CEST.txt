@@ -1,0 +1,14 @@
+diff --git a/deugniets.py b/deugniets.py
+index 8093887..5a2ba06 100644
+--- a/deugniets.py
++++ b/deugniets.py
+@@ -1765,8 +1765,7 @@ def dns_query(name, rdclass, rdtype, qid, cip, unfilter, fttl):
+         unfilter = True
+ 
+     if unfilter:
+-        #cachename = '{0}/IN/{1}/{2}'.format(qname, qrdtype, cip)
+-        cachename = '{0}/IN/{1}/UNFILTER'.format(qname, qrdtype, cip)
++        cachename = '{0}/IN/{1}/{2}'.format(qname, qrdtype, cip)
+         if ip6 is None:
+             logging.info('INTERNAL-{0}-UNFILTER: {1}'.format(cip, cachename))
+ 

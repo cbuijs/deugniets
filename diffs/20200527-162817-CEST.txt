@@ -1,0 +1,13 @@
+diff --git a/deugniets.py b/deugniets.py
+index cb6963d..da858b9 100644
+--- a/deugniets.py
++++ b/deugniets.py
+@@ -1780,7 +1780,7 @@ def dns_query(name, rdclass, rdtype, qid, cip, unfilter, fttl):
+                 count = 0
+                 for entry in sorted(hitlist, key=hitlist.get, reverse=True): #[0:50]
+                     count += 1
+-                    logging.info('CACHE-STATS: #{0} {1} = {2} Hits'.format(count, entry, hitlist.get(entry, 0)))
++                    logging.info('CACHE-STATS: #{0} {1} = {2} Cache-Hits'.format(count, entry, hitlist.get(entry, 0)))
+ 
+             else:
+                 logging.error('COMMAND-UNKNOWN: {0}'.format(command))

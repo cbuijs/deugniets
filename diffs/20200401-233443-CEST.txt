@@ -1,0 +1,341 @@
+diff --git a/deugniets.py b/deugniets.py
+index 7444ccf..eeaea1d 100644
+--- a/deugniets.py
++++ b/deugniets.py
+@@ -1,7 +1,7 @@
+ #!/usr/bin/env python3
+ '''
+ ===========================================================================
+- deugniets.py v2.775-20200401 Copyright 2019-2020 by cbuijs@chrisbuijs.com
++ deugniets.py v2.777-20200401 Copyright 2019-2020 by cbuijs@chrisbuijs.com
+ ===========================================================================
+ 
+  Based on: https://github.com/supriyo-biswas/adblock-dns-server
+@@ -1089,100 +1089,99 @@ def check_badip(cip):
+     if config['filtering'] is False:
+         return False
+ 
+-    if is_ip.search(cip):
+-        count = 0
+-        while count < config['retry_count'] and cip in beingchecked:
+-            count += 1
+-            #logging.debug('BADIP-SLEEP: {0} (#{1})'.format(cip, count))
+-            time.sleep(config['retry_wait'])
++    count = 0
++    while count < config['retry_count'] and cip in beingchecked:
++        count += 1
++        #logging.debug('BADIP-SLEEP: {0} (#{1})'.format(cip, count))
++        time.sleep(config['retry_wait'])
+ 
+-        if count >= config['retry_count'] and cip in beingchecked:
+-            logging.error('BADIP-FAIL: {0} - Took to long to check'.format(cip))
+-            beingchecked.discard(cip)
+-            return False
++    if count >= config['retry_count'] and cip in beingchecked:
++        logging.error('BADIP-FAIL: {0} - Took to long to check'.format(cip))
++        beingchecked.discard(cip)
++        return False
+ 
+-        beingchecked.add(cip)
++    beingchecked.add(cip)
+ 
+-        if cip.find(':') > 0:
+-            wl_ip = wl_ip6
+-            bl_ip = bl_ip6
+-            private = private6
+-        else:
+-            wl_ip = wl_ip4
+-            bl_ip = bl_ip4
+-            private = private4
+-    
+-        if (cip in private) or (cip in wl_ip):
+-            #if config['log_hits']:
+-                #logging.warning('ACL-WHITELIST-HIT: Client {0} -> {1}'.format(cip, wl_ip.get_key(cip)))
+-            beingchecked.discard(cip)
+-            return False
++    if cip.find(':') > 0:
++        wl_ip = wl_ip6
++        bl_ip = bl_ip6
++        private = private6
++    else:
++        wl_ip = wl_ip4
++        bl_ip = bl_ip4
++        private = private4
++
++    if (cip in private) or (cip in wl_ip):
++        #if config['log_hits']:
++            #logging.warning('ACL-WHITELIST-HIT: Client {0} -> {1}'.format(cip, wl_ip.get_key(cip)))
++        beingchecked.discard(cip)
++        return False
+ 
+-        elif cip in bl_ip:
+-            if config['log_hits']:
+-                logging.warning('ACL-BLACKLIST-HIT: Client {0} -> {1}'.format(cip, bl_ip.get_key(cip)))
+-            beingchecked.discard(cip)
+-            return True
++    elif cip in bl_ip:
++        if config['log_hits']:
++            logging.warning('ACL-BLACKLIST-HIT: Client {0} -> {1}'.format(cip, bl_ip.get_key(cip)))
++        beingchecked.discard(cip)
++        return True
+ 
+-        elif config['abuseipdbkey']:
+-            score = False
+-            ipcheck = False
++    elif config['abuseipdbkey']:
++        score = False
++        ipcheck = False
+ 
+-            #logging.debug('ABUSEIPDB-CHECK: {0}'.format(cip))
++        #logging.debug('ABUSEIPDB-CHECK: {0}'.format(cip))
+ 
+-            url = 'https://api.abuseipdb.com/api/v2/check'
+-            querystring = {'ipAddress': cip, 'maxAgeInDays': '90'}
+-            headers = {'Accept': 'application/json', 'Key': config['abuseipdbkey']}
++        url = 'https://api.abuseipdb.com/api/v2/check'
++        querystring = {'ipAddress': cip, 'maxAgeInDays': '90'}
++        headers = {'Accept': 'application/json', 'Key': config['abuseipdbkey']}
+ 
+-            count = 0
+-            while count < 3:
+-                count += 1
++        count = 0
++        while count < 3:
++            count += 1
+ 
+-                try:
+-                    #response = abuseipdb_session.get(url, timeout=5, headers=headers, params=querystring, allow_redirects=False, proxies=None, stream=True)
+-                    response = requests.get(url, timeout=5, headers=headers, params=querystring, allow_redirects=False, proxies=None)
+-                    if response.status_code == 200:
+-                        limit = int(response.headers['X-RateLimit-Limit'])
+-                        remain = int(response.headers['X-RateLimit-Remaining'])
+-
+-                        logging.info('ABUSEIPDB-COUNT: {0}/{1}'.format(limit - remain, limit)) # Make debug
+-
+-                        ipcheck = json.loads(response.text)
+-                        #logging.debug('ABUSEIPDB-JSON-DEBUG: {0}'.format(json.dumps(ipcheck, sort_keys=True, indent=4)))
+-                        break
+-                    elif response.status_code == 429:
+-                        ipcheck = 'MAX'
+-                        logging.warning('ABUSEIPDB-USAGE: {0} - Max usage reached'.format(cip))
+-                        break
+-                    else:
+-                        logging.error('ABUSEIPDB-GET-ERROR: {0} - {1} (#{2})'.format(cip, response.status_code, count))
++            try:
++                #response = abuseipdb_session.get(url, timeout=5, headers=headers, params=querystring, allow_redirects=False, proxies=None, stream=True)
++                response = requests.get(url, timeout=5, headers=headers, params=querystring, allow_redirects=False, proxies=None)
++                if response.status_code == 200:
++                    limit = int(response.headers['X-RateLimit-Limit'])
++                    remain = int(response.headers['X-RateLimit-Remaining'])
+ 
++                    logging.info('ABUSEIPDB-COUNT: {0}/{1}'.format(limit - remain, limit)) # Make debug
+ 
+-                except BaseException as err:
+-                    logging.error('ABUSEIPDB-ERROR: {0} - {1} (#{2})'.format(cip, err, count))
++                    ipcheck = json.loads(response.text)
++                    #logging.debug('ABUSEIPDB-JSON-DEBUG: {0}'.format(json.dumps(ipcheck, sort_keys=True, indent=4)))
++                    break
++                elif response.status_code == 429:
++                    ipcheck = 'MAX'
++                    logging.warning('ABUSEIPDB-USAGE: {0} - Max usage reached'.format(cip))
++                    break
++                else:
++                    logging.error('ABUSEIPDB-GET-ERROR: {0} - {1} (#{2})'.format(cip, response.status_code, count))
+ 
+-                time.sleep(config['retry_wait'])
+ 
+-            if ipcheck and ipcheck != 'MAX':
+-                score = ipcheck['data']['abuseConfidenceScore']
+-                logging.info('ABUSEIPDB-SCORE: {0} = {1}% ({2} - {3})'.format(cip, score, ipcheck['data']['countryCode'], ipcheck['data']['isp']))
++            except BaseException as err:
++                logging.error('ABUSEIPDB-ERROR: {0} - {1} (#{2})'.format(cip, err, count))
+ 
+-                if score and score > 90:
+-                    if config['log_hits']:
+-                        logging.warning('ABUSEIPDB-BLACKLIST-HIT: Score for Client {0} = {1}% ({2})'.format(cip, score, geo(cip)))
+-                    bl_ip[cip] = True
+-                    beingchecked.discard(cip)
+-                    return True
++            time.sleep(config['retry_wait'])
+ 
++        if ipcheck and ipcheck != 'MAX':
++            score = ipcheck['data']['abuseConfidenceScore']
++            logging.info('ABUSEIPDB-SCORE: {0} = {1}% ({2} - {3})'.format(cip, score, ipcheck['data']['countryCode'], ipcheck['data']['isp']))
++
++            if score and score > 90:
++                if config['log_hits']:
++                    logging.warning('ABUSEIPDB-BLACKLIST-HIT: Score for Client {0} = {1}% ({2})'.format(cip, score, geo(cip)))
++                bl_ip[cip] = True
++                beingchecked.discard(cip)
++                return True
+ 
+-        if dnsl_check(config['dnsbl'], cip, True):
+-            if config['log_hits']:
+-                logging.warning('ACL-DNSBL-BLACKLIST-HIT: {0}'.format(cip))
+-            bl_ip[cip] = True
+-            beingchecked.discard(cip)
+-            return True
+ 
+-        wl_ip[cip] = True # !!! Use something else, will work for now - Can be utilized/misused to auto-whitelist when flooding
++    if dnsl_check(config['dnsbl'], cip, True):
++        if config['log_hits']:
++            logging.warning('ACL-DNSBL-BLACKLIST-HIT: {0}'.format(cip))
++        bl_ip[cip] = True
++        beingchecked.discard(cip)
++        return True
++
++    wl_ip[cip] = True # !!! Use something else, will work for now - Can be utilized/misused to auto-whitelist when flooding
+ 
+     beingchecked.discard(cip)
+     return False
+@@ -1329,24 +1328,27 @@ def dns_query(name, rdclass, rdtype, qid, cip, unfilter, fttl):
+ 
+     cachename = '{0}/IN/{1}'.format(qname, qrdtype)
+ 
+-    if is_ip.search(cip) and cip not in private4 and cip not in private6:
+-        cachename = '{0}/PUBLIC'.format(cachename)
++    if is_ip.search(cip):
++        if check_badip(cip):
++            return (dns.rcode.REFUSED, [], [], [])
+ 
+-    if cip == 'SPOOFER':
++        if cip not in private4 and cip not in private6:
++            cachename = '{0}/PUBLIC'.format(cachename)
++
++        if config['use_ecs_ip']:
++            tag = "IP4"
++            if cip.find(':') > 0:
++                tag = "IP6"
++
++            cachename = '{0}/{1}'.format(cachename, tag)
++
++    elif cip == 'SPOOFER':
+         unfilter = True
+ 
+     if unfilter:
++        #fttl = config['unfilter_ttl']
+         cachename = '{0}/{1}'.format(cachename, cip)
+ 
+-    if is_ip.search(cip):
+-        if cip.find(':') > 0:
+-            cachename = '{0}/IP6'.format(cachename, cip)
+-        else:
+-            cachename = '{0}/IP4'.format(cachename, cip)
+-
+-    if check_badip(cip):
+-        return (dns.rcode.REFUSED, [], [], [])
+-
+     if qrdtype == 'ANY' and config['blockany']:
+         logging.warning('BLOCK-ANY-HIT [{0}]: {1}'.format(qid, cachename))
+         return (dns.rcode.REFUSED, [], [], [])
+@@ -1428,22 +1430,26 @@ def dns_query(name, rdclass, rdtype, qid, cip, unfilter, fttl):
+  
+     # get from cache
+     parentcount = -1
+-    maxparentcount = cachename.count('.') - 1
++    lcachename = cachename.split('/')[0]
++    rcachename = '/'.join(cachename.split('/')[1:])
++    
++    maxparentcount = lcachename.count('.') - 1
+     while parentcount < maxparentcount:
+         parentcount += 1
+-        parentcachename = '.'.join(cachename.split('.')[parentcount:])
++        parentcachename = '.'.join(lcachename.split('.')[parentcount:])
++        gcachename = '{0}/{1}'.format(parentcachename, rcachename)
+ 
+         #if config['log_caching']:
+-        #    logging.debug('CACHE-CHECK [{0}]: {1} <- {2}'.format(qid, cachename, parentcachename))
++        #    logging.info('CACHE-CHECK [{0}]: {1} <- {2}'.format(qid, cachename, gcachename))
+ 
+-        result = cache.get(parentcachename)
++        result = cache.get(gcachename)
+         if result is not None:
+-            obj = cache.info(name=parentcachename)
++            obj = cache.info(name=gcachename)
+             expires = obj.timestamp + obj.ttl
+             left = int(expires - time.time())
+             if left > 0:
+                 result = update_ttls(result, left)
+-                if parentcachename == cachename:
++                if gcachename == cachename:
+                     if config['log_caching'] and config['log_hits'] and is_ip.search(cip):
+                         logging.info('CACHE-HIT [{0}]: {1} = {2} (TTL-LEFT:{3}) - {4}'.format(qid, cachename, dns.rcode.to_text(result[0]), left, result[4]))
+                         log_helper(qname, qrdtype, result, 'RESPONSE-FROM-CACHE', qid)
+@@ -1452,7 +1458,7 @@ def dns_query(name, rdclass, rdtype, qid, cip, unfilter, fttl):
+                 elif result[0] != 0: # Parent cache not NOERROR
+                     newresult = (result[0], [], result[2], [], result[4])
+                     if config['log_caching'] and config['log_hits'] and is_ip.search(cip):
+-                        logging.info('PARENT-CACHE-HIT [{0}]: {1} = {2} = {3} (TTL-LEFT:{4}) - {5}'.format(qid, cachename, parentcachename, dns.rcode.to_text(result[0]), left, result[4]))
++                        logging.info('PARENT-CACHE-HIT [{0}]: {1} = {2} = {3} (TTL-LEFT:{4}) - {5}'.format(qid, cachename, gcachename, dns.rcode.to_text(result[0]), left, result[4]))
+                         log_helper(qname, qrdtype, newresult, 'RESPONSE-FROM-PARENT-CACHE', qid)
+                     cache.add(obj=CachedObject(name=cachename, obj=newresult, ttl=left))
+                     return (newresult[0], [], newresult[2], [])
+@@ -1465,7 +1471,7 @@ def dns_query(name, rdclass, rdtype, qid, cip, unfilter, fttl):
+                                     target = str(rr.address)
+                                     if target in config['redirect_ip']:
+                                         if config['log_caching'] and config['log_hits'] and is_ip.search(cip):
+-                                            logging.info('PARENT-CACHE-HIT [{0}]: {1} = {2} = {3} (TTL-LEFT:{4}) - {5}'.format(qid, cachename, parentcachename, target, left, result[4]))
++                                            logging.info('PARENT-CACHE-HIT [{0}]: {1} = {2} = {3} (TTL-LEFT:{4}) - {5}'.format(qid, cachename, gcachename, target, left, result[4]))
+                                             log_helper(qname, qrdtype, result, 'RESPONSE-FROM-PARENT-CACHE', qid)
+                                         cache.add(obj=CachedObject(name=cachename, obj=result, ttl=left))
+                                         return (result[0], result[1], result[2], result[3])
+@@ -1632,10 +1638,10 @@ def dns_query(name, rdclass, rdtype, qid, cip, unfilter, fttl):
+         result = False
+         response = None
+ 
+-        rttstart = time.time()
++        #rttstart = time.time()
+         response, _ = dox_request(qid, qname, rdtype, cachename, addrs, False, cip)
+-        rttend = time.time()
+-        logging.info('RTT [{0}]: Resolving {1} took {2} msec'.format(qid, cachename, round((rttend - rttstart) * 1000)))
++        #rttend = time.time()
++        #logging.info('RTT [{0}]: Resolving {1} took {2} msec'.format(qid, cachename, round((rttend - rttstart) * 1000)))
+ 
+         if response is not None:
+             rv = (response.rcode(), response.answer, response.authority, response.additional)
+@@ -1938,18 +1944,20 @@ def dox_request(qid, qname, rdtype, cachename, urls, rfc8484, cip):
+                         url += '/{0}-{1}'.format(regex.sub('\s+', '%20', config['nextdns_id']), regex.sub('[\.\:]+', '-', cip))
+ 
+                     if config['log_forwards']:
+-                        cached = cache.get('{0}/443/GETADDRINFO'.format(url.split('/')[2]))
+                         ips = '-'
++                        cached = cache.get('{0}/443/GETADDRINFO'.format(url.split('/')[2]))
+                         if cached:
+                             ips = list((map(lambda x: x[4][0], cached)))
+                             if (af == 2 and len(list(filter(is_ip4.search, ips))) < 1) or (af == 10 and len(list(filter(is_ip6.search, ips))) < 1):
+                                 aftag = "Auto-IPv4/6"
+                                 af = None
++
+                         else:
+                             aftag = "Auto-IPv4/6"
+                             af = None
+ 
+-                        logging.info('DOH-QUERY [#{0}]: Query for {1}/IN/{2} to {3}@{4} ({5} - {6})'.format(retries, qname, dns.rdatatype.to_text(rdtype), url, port, aftag, ', '.join(ips)))
++                        #logging.info('DOH-QUERY [#{0}]: Query for {1}/IN/{2} to {3}@{4} ({5} - {6})'.format(retries, qname, dns.rdatatype.to_text(rdtype), url, port, aftag, ', '.join(ips)))
++                        logging.info('DOH-QUERY [#{0}]: Query for {1}/IN/{2} to {3}@{4} ({5})'.format(retries, qname, dns.rdatatype.to_text(rdtype), url, port, aftag))
+ 
+                     response = False
+                     try:
+@@ -2559,19 +2567,21 @@ def run_server():
+ 
+                 if dox != 'DNS':
+                     ips = list(map(lambda x: x[4][0], socket.getaddrinfo('{0}.'.format(hostname.rstrip('.')), aport, type=socket.SOCK_STREAM)))
+-                    logging.info('{0}-SERVER: {1}://{2}@{3} ({4})'.format(dox, dox.lower(), hostname, aport, ', '.join(ips)))
++                    logging.info('{0}-NAME-SERVER: {1}://{2}@{3} ({4})'.format(dox, dox.lower(), hostname, aport, ', '.join(ips)))
+                     for ip in ips:
+                         if dox == 'HTTPS':
+                             newentry = dnsserver
+                         else:
+                             newentry = '{0}://{1}@{2}#{3}'.format(dox, hostname, aport, ip)
+                 else:
++                    logging.info('{0}-NAME-SERVER: {1}://{2}@{3}'.format(dox, dox.lower(), hostname, aport))
+                     newentry = 'dns://{0}@{1}'.format(hostname, aport)
+                  
+                 if newentry:
+                     newnameservers.append(newentry.lower())
+ 
+             else:
++                logging.info('NAME-SERVER: {0}'.format(dnsserver))
+                 newnameservers.append(dnsserver)
+ 
+     if newnameservers:

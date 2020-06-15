@@ -1,0 +1,209 @@
+diff --git a/deugniets.conf b/deugniets.conf
+index 8dd1ede..8e9850c 100644
+--- a/deugniets.conf
++++ b/deugniets.conf
+@@ -20,6 +20,7 @@ port = 53001
+ #nameservers = ["https://doh.powerdns.org"]
+ #nameservers = ["https://dns.nextdns.io/65fef9/https-nuc"]
+ nameservers = ["https://dns.nextdns.io/126ab2/nuc-deugniets-https"]
++#nameservers = ["45.90.28.131", "45.90.30.131", "2a07:a8c0::12:6ab2", "2a07:a8c1::12:6ab2"]
+ bootstrap = ["45.90.28.131", "45.90.30.131", "2a07:a8c0::12:6ab2", "2a07:a8c1::12:6ab2"]
+ #nameservers = ["127.0.0.1", "::1"]
+ 
+@@ -89,7 +90,7 @@ check_tld = false
+ tld_url = "/opt/accomplist/chris/tld-iana.list"
+ 
+ # Use DNSBL/WL !!! WIP !!!
+-use_dnsl = true
++use_dnsl = false
+ dnsbl = ["BLOCKLIST.DE:ip:de.bl.blocklist.de.", "SPAMHAUS-ZEN:ip:zen.spamhaus.org.", "SPAMHAUS-DBL:dom:dbl.spamhaus.org."]
+ #dnsbl = ["BLOCKLIST.DE:ip:de.bl.blocklist.de."]
+ 
+@@ -115,6 +116,6 @@ optimize = false
+ #whitelist = ["/opt/deugniets/alias.list", "/opt/accomplist/deugniets/plain.white.regex.list", "/opt/accomplist/deugniets/optimized.white.domain.list", "/opt/accomplist/deugniets/plain.white.ip4cidr.list", "/opt/accomplist/deugniets/plain.white.ip6cidr.list"]
+ #blacklist = ["/opt/accomplist/chris/regex.black", "/opt/accomplist/deugniets/plain.black.regex.list", "/opt/accomplist/deugniets/optimized.black.domain.list", "/opt/accomplist/deugniets/plain.black.ip4cidr.list", "/opt/accomplist/deugniets/plain.black.ip6cidr.list"]
+ 
+-whitelist = ["/opt/deugniets/alias.list", "/opt/deugniets/doh.alias.list", "/opt/accomplist/chris/connectivity-check.list", "/opt/accomplist/dnsdist/deugniets.white.list", "/opt/accomplist/chris/white.special", "/opt/accomplist/chris/private-addresses.list"]
+-blacklist = ["/opt/deugniets/black.list", "/opt/accomplist/dnsdist/deugniets.black.list","/opt/accomplist/family-safe/deugniets.black.list", "/opt/accomplist/malicious-ip/deugniets.black.list"]
++#whitelist = ["/opt/deugniets/alias.list", "/opt/deugniets/doh.alias.list", "/opt/accomplist/chris/connectivity-check.list", "/opt/accomplist/dnsdist/deugniets.white.list", "/opt/accomplist/chris/white.special", "/opt/accomplist/chris/private-addresses.list"]
++#blacklist = ["/opt/deugniets/black.list", "/opt/accomplist/dnsdist/deugniets.black.list","/opt/accomplist/family-safe/deugniets.black.list", "/opt/accomplist/malicious-ip/deugniets.black.list"]
+ 
+diff --git a/deugniets.py b/deugniets.py
+index 7adc6ec..8df7d62 100644
+--- a/deugniets.py
++++ b/deugniets.py
+@@ -1,7 +1,7 @@
+ #!/usr/bin/env python3
+ '''
+ =======================================================================
+- deugniets.py v2.35-20191012 Copyright 2019 by cbuijs@chrisbuijs.com
++ deugniets.py v2.36-20191013 Copyright 2019 by cbuijs@chrisbuijs.com
+ =======================================================================
+ 
+  Based on: https://github.com/supriyo-biswas/adblock-dns-server
+@@ -58,7 +58,7 @@ import dns.exception
+ import dns.rdataclass
+ import dns.renderer
+ 
+-# ClientSubNetOption
++# Process EDNS Clienti SubNet Option
+ import clientsubnetoption
+ 
+ # Regex
+@@ -75,13 +75,13 @@ import pytricia
+ from IPy import IP, IPSet
+ 
+ # Sequencematcher
+-from difflib import SequenceMatcher
++#from difflib import SequenceMatcher
+ 
+ # Stuff needed for DoH
+ #import io, base64, urllib.parse
+ #import pycurl
+ import base64
+-#from hyper.contrib import HTTP20Adapter
++from hyper.contrib import HTTP20Adapter
+ 
+ # Stuff needed for ratelimit
+ #from ratelimit import limits, sleep_and_retry
+@@ -339,7 +339,6 @@ def read_list(filenames, listname, domlst, ip4lst, ip6lst, rxlst, unlst, unip4,
+             count = 0
+             for line in lines:
+                 count += 1
+-                #entry = regex.split('\s*#\s*', regex.split('\s+', line.replace('\r', '').replace('\n', ''))[0])[0].strip().rstrip('!') # Strip comments and line-feeds
+                 entry = regex.split('\s*#\s*', line.replace('\r', '').replace('\n', ''))[0].strip().rstrip('!') # Strip comments and line-feeds
+                 if entry:
+                     if config['filter_response'] and is_ip4.search(entry):
+@@ -468,9 +467,6 @@ def get_lines(filename, listname):
+             r = requests.get(filename, timeout=10, headers=headers, allow_redirects=True)
+             if r.status_code == 200:
+                 lines = uniq(r.text.splitlines(), filename)
+-                #lines = list(dict.fromkeys(r.text.splitlines())) # Get unique lines PYTHON 3.7!
+-                #lines = sorted(set(r.text.splitlines()))
+-                #lines = list(OrderedDict.fromkeys(r.text.splitlines()))
+             else:
+                 logging.error('ERROR: Unable to download from \"{0}\" ({1})'.format(filename, r.status_code))
+ 
+@@ -481,10 +477,7 @@ def get_lines(filename, listname):
+         logging.debug('FETCH: Fetching \"{0}\" from file \"{1}\"'.format(listname, filename))
+         try:
+             f = open(filename, 'r')
+-            lines = uniq(f.read().splitlines(), filename) # Get unique lines PYTHON 3.7!
+-            #lines = list(dict.fromkeys(f.read().splitlines())) # Get unique lines PYTHON 3.7!
+-            #lines = sorted(set(f.read().splitlines()))
+-            #lines = list(OrderedDict.fromkeys(f.read().splitlines()))
++            lines = uniq(f.read().splitlines(), filename)
+             f.close()
+ 
+         except BaseException as err:
+@@ -498,10 +491,11 @@ def get_lines(filename, listname):
+ 
+ 
+ def uniq(lst, lstname):
+-    seen = set()
+-    newlst = list([x for x in lst if x and x not in seen and not seen.add(x) and not x.startswith('#')])
++    return list(dict.fromkeys(lst, lstname))
++    #seen = set()
++    #newlst = list([x for x in lst if x and x not in seen and not seen.add(x) and not x.startswith('#')])
+     #logging.debug('UNIQ [{0}]: Number of lines went from {1} to {2} ({3})'.format(lstname, len(lst), len(newlst), len(newlst) - len(lst)))
+-    return newlst
++    #return newlst
+ 
+ 
+ def file_exist(file, isdb):
+@@ -1017,7 +1011,7 @@ def collapse(name, answer, qid):
+ def dnsl_check(dnsl, value, isip):
+     if config['nameservers'] and (not iparpa.search(value)):
+         for service in dnsl:
+-            servicename, servicetype, domain = '{0}::'.format(service).split(':')[0:3]
++            servicename, servicetype, domain = '{0}::'.format(service).lower().split(':')[0:3]
+             if servicename and servicetype and domain and (not value.endswith('.' + domain)):
+                 qname = False
+                 tag = 'UNKNOWN'
+@@ -1031,24 +1025,25 @@ def dnsl_check(dnsl, value, isip):
+                     qname = value + domain
+ 
+                 if qname:
++                    servicename = servicename.upper()
+                     cachename = qname + '/IN/A'
+                     qid = random.randint(1025, 65535)
+                     if config['log_requests']:
+-                        logging.info('DNSL-CHECK-{0}-{1} [{2}]: {3} ({4})'.format(tag, servicename, qid, value, qname))
++                        logging.info('DNSL-CHECK-{0} [{2}]: {3} ({4}) on {1}'.format(tag, servicename, qid, value, qname))
+  
+                     rcode, response = dns_query(qname, 1, 1, qid, 'DNSL', True, config['dnsl_ttl'])[0:2]
+ 
+                     if rcode == 0 and countrr(response) > 0:
+                         if config['log_responses']:
+-                            logging.info('DNSL-CHECK-{0}-{1}-RESPONSE [{2}] {3} = LISTED'.format(tag, servicename, qid, value))
++                            logging.info('DNSL-CHECK-{0}-RESPONSE [{2}] {3} = LISTED on {1}'.format(tag, servicename, qid, value))
+                         return True
+ 
+                     elif rcode == 3: # NXDOMAIN
+                         if config['log_responses']:
+-                            logging.info('DNSL-CHECK-{0}-{1}-RESPONSE [{2}] {3} = NOTLISTED'.format(tag, servicename, qid, value))
++                            logging.info('DNSL-CHECK-{0}-RESPONSE [{2}] {3} = NOTLISTED on {1}'.format(tag, servicename, qid, value))
+ 
+                     else:
+-                        logging.error('DNSL-CHECK-{0}-{1}-RESPONSE [{2}] {3} = ERROR - {4} - {5}'.format(tag, servicename, qid, value, rcode, response))
++                        logging.error('DNSL-CHECK-{0}-RESPONSE [{2}] {3} = ERROR - {4} - {5} using {1}'.format(tag, servicename, qid, value, rcode, response))
+                         
+     return False
+ 
+@@ -1629,7 +1624,7 @@ def dox_request(qname, rdtype, cachename, urls, rfc8484):
+                     logging.warning('DOH-INFO: Re-initiating session')
+                     requests_session.close()
+                     requests_session = requests.Session()
+-                    #requests_session.mount('https://', HTTP20Adapter())
++                    requests_session.mount('https://', HTTP20Adapter())
+ 
+                 elif rcode == 200:
+                     #body = answerbuffer.getvalue() # Pycurl
+@@ -1788,11 +1783,13 @@ def handle_query(raw_data, client_ip):
+         logging.error('REQUEST-ERROR: Query from {0} - {1}'.format(client_ip, e))
+         return
+ 
+-    if config['use_edns_ip'] and hasattr(query, 'options'):
++    if config['use_ecs_ip'] and hasattr(query, 'options'):
+         for opt in query.options:
+             if hasattr(opt, 'ip') and hasattr(opt, 'mask'):
+-                logging.info('EDNS0-ECS [{0}]: Client {1} provides {2}'.format(query.id, client_ip, IP('{0}/{1}'.format(opt.ip, opt.mask)).strNormal(1)))
+-                if opt.mask in (32, 128):
++                if config['log_requests']:
++                    logging.info('EDNS-CLIENT-SUBNET [{0}]: Client {1} provides {2}'.format(query.id, client_ip, '{0}/{1}'.format(IP(opt.ip).strNormal(0), opt.mask)))
++
++                if opt.mask in (None, 0, 32, 128):
+                     client_ip = IP('{0}/{1}'.format(opt.ip, opt.mask)).strNormal(0)
+                     break
+ 
+@@ -2049,8 +2046,8 @@ if __name__ == '__main__':
+     config['max_ttl'] = 86400
+     config['spoof_ttl'] = 3600
+ 
+-    # Use EDNS ECS IP as client IP (only when /32 or /128)
+-    config['use_edns_ip'] = True
++    # Use EDNS CLIENT SUBNET (ECS) IP as client IP (only when /32 or /128)
++    config['use_ecs_ip'] = True
+ 
+     # Random RoundRobin
+     config['roundrobin'] = True
+@@ -2257,7 +2254,7 @@ if __name__ == '__main__':
+     # Setup request sessions
+     #if config['bootstrap']: !!! TODO !!!
+     requests_session = requests.Session()
+-    #requests_session.mount('https://', HTTP20Adapter())
++    requests_session.mount('https://', HTTP20Adapter())
+ 
+     # Run
+     run_server()
+diff --git a/requirements.txt b/requirements.txt
+index e111bd6..0937d8e 100644
+--- a/requirements.txt
++++ b/requirements.txt
+@@ -1,5 +1,6 @@
+ clientsubnetoption>=2.1.1
+ dnspython>=2.0.0
++hyper>=0.7.0
+ idna>=2.8
+ IPy>=1.0
+ pytricia>=1.0.0

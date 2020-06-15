@@ -1,0 +1,35 @@
+diff --git a/deugniets.py b/deugniets.py
+index 2181312..fcf7403 100644
+--- a/deugniets.py
++++ b/deugniets.py
+@@ -1,7 +1,7 @@
+ #!/usr/bin/env python3
+ '''
+ ===========================================================================
+- deugniets.py v2.745-20200302 Copyright 2019-2020 by cbuijs@chrisbuijs.com
++ deugniets.py v2.75-20200303 Copyright 2019-2020 by cbuijs@chrisbuijs.com
+ ===========================================================================
+ 
+  Based on: https://github.com/supriyo-biswas/adblock-dns-server
+@@ -1494,7 +1494,11 @@ def dns_query(name, rdclass, rdtype, qid, cip, unfilter, fttl):
+             #rv = (dns.rcode.NOERROR, [], [], []) # Workaround for searchdomains
+             rv = (config['blacklist_rcode'], [], [], [])
+ 
+-        if rv is None and (qrdtype in ('A', 'AAAA', 'CNAME')) and (cip in private4 or cip in private6):
++        ip6 =  False
++        if cip.find(':') > 0:
++            ip6 = True
++
++        if rv is None and (qrdtype in ('A', 'AAAA', 'CNAME')) and is_ip.search(cip) and ((ip6 is False and cip in private4) or (ip6 is True and cip in private6)):
+             match = check_dom('NAME', qname, alias, 'ALIAS', False, False)
+             if match:
+                 spoof = alias[match]
+@@ -1837,7 +1841,7 @@ def dns_query(name, rdclass, rdtype, qid, cip, unfilter, fttl):
+                 soa = dns.rrset.from_text(qname, ttl, 'IN', 6, "{0}.{1} {2}.{1} 1 60 60 60 60".format(dns.rcode.to_text(rcode).lower(), qname, qrdtype.lower()))
+                 rv = (rcode, [], [soa], [])
+ 
+-            # All TTLs same
++            # All TTLs the same
+             rv = update_ttls(rv, ttl)
+ 
+             # Cache

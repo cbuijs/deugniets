@@ -1,0 +1,50 @@
+diff --git a/Dockerfile b/Dockerfile
+index 7eacc9e..3d9e610 100644
+--- a/Dockerfile
++++ b/Dockerfile
+@@ -13,7 +13,11 @@ ADD requirements.txt /opt/deugniets/requirements.txt
+ ADD deugniets.conf.docker /opt/deugniets/deugniets.conf
+ ADD local.list.docker /opt/deugniets/local.list
+ RUN pip3 install --upgrade pip
++RUN pip3 install --upgrade chardet==3.0.4
++RUN pip3 install --upgrade urllib3==1.25.7
++RUN pip3 install --upgrade git+https://github.com/opendns/dnspython-clientsubnetoption@master
+ RUN pip3 install --upgrade git+https://github.com/rthalley/dnspython@master
++RUN pip3 install --upgrade git+https://github.com/psf/requests
+ RUN pip3 install --upgrade -r /opt/deugniets/requirements.txt
+ CMD [ "python3", "/opt/deugniets/deugniets.py", "/opt/deugniets/deugniets.conf" ]
+ 
+diff --git a/deugniets.py b/deugniets.py
+index ec0479b..291ff4e 100644
+--- a/deugniets.py
++++ b/deugniets.py
+@@ -1,7 +1,7 @@
+ #!/usr/bin/env python3
+ '''
+ =======================================================================
+- deugniets.py v2.58-20191125 Copyright 2019 by cbuijs@chrisbuijs.com
++ deugniets.py v2.590-20191125 Copyright 2019 by cbuijs@chrisbuijs.com
+ =======================================================================
+ 
+  Based on: https://github.com/supriyo-biswas/adblock-dns-server
+@@ -96,7 +96,7 @@ from cache import CachedObject, CacheInventory
+ # Initialize caches
+ cache = CacheInventory(maxsize=65535, housekeeping=60, name='DNS-Cache')
+ listed_cache = CacheInventory(maxsize=16384, housekeeping=60, name='Label-Cache')
+-unfilter_cache = CacheInventory(maxsize=512, housekeeping=60, name='UnFilter-IP')
++unfilter_cache = CacheInventory(maxsize=512, housekeeping=60, name='UnFilter')
+ 
+ # Lists
+ wl_dom = dict()
+@@ -335,9 +335,9 @@ def agg_ip(iplist, listname, fam):
+     logging.info('AGGREGATE-{0}-[{1}]: Aggregating List ...'.format(fam, listname))
+ 
+     if fam == 'IPV4':
+-        new = pytricia.PyTricia(32)
++        new = pytricia.PyTricia(32, socket.AF_INET)
+     else:
+-        new = pytricia.PyTricia(128)
++        new = pytricia.PyTricia(128, socket.AF_INET6)
+ 
+     for ip in netaddr.cidr_merge(list(iplist)):
+         ip = str(ip)

@@ -1,0 +1,50 @@
+diff --git a/deugniets.py b/deugniets.py
+index afefe8d..2a4cdd3 100644
+--- a/deugniets.py
++++ b/deugniets.py
+@@ -1,7 +1,7 @@
+ #!/usr/bin/env python3
+ '''
+ ===========================================================================
+- deugniets.py v3.26-20200612 Copyright 2019-2020 by cbuijs@chrisbuijs.com
++ deugniets.py v3.261-20200612 Copyright 2019-2020 by cbuijs@chrisbuijs.com
+ ===========================================================================
+ 
+  Based on: https://github.com/supriyo-biswas/adblock-dns-server
+@@ -1922,10 +1922,8 @@ def dns_query(name, rdclass, rdtype, qid, cip, unfilter, fttl):
+                     logging.warning('FORWARDER-BLACKLIST-HIT: \"{0}\" -> \"{1}\" -> \"{2}\"'.format(qname, matchf, matchb))
+                 matchf = False
+ 
+-    else:
+-        matcha = check_dom_trie('NAME', qname, alias_trie, 'ALIAS', False, False)
+-
+     if rv is None and config['filtering'] and config['filter_request'] and unfilter is False and (not matchf):
++        matcha = check_dom_trie('NAME', qname, alias_trie, 'ALIAS', False, False)
+         if not matcha:
+             wmatch = None
+             if matchb:
+@@ -1957,14 +1955,8 @@ def dns_query(name, rdclass, rdtype, qid, cip, unfilter, fttl):
+ 
+         if rv is None and (qrdtype in ('A', 'AAAA', 'CNAME')) and ((ip6 is False and cip in private4) or (ip6 is True and cip in private6)): # Only spoof answers for queries from private clients
+             if matcha:
+-                match = matcha
+-            else:
+-                #match = check_dom('NAME', qname, alias, 'ALIAS', False, False)
+-                match = check_dom_trie('NAME', qname, alias_trie, 'ALIAS', False, False)
+-
+-            if match:
+                 #spoof = alias[match]
+-                spoof = alias_trie[match[::-1]]
++                spoof = alias_trie[matcha[::-1]]
+                 if spoof != qname:
+                     count = 0
+                     #while count < config['retry_count'] and (qname in beingspoofed or check_dom('NAME', qname, beingspoofed, 'SPOOFER-CHECKER', False, False)):
+@@ -2032,7 +2024,7 @@ def dns_query(name, rdclass, rdtype, qid, cip, unfilter, fttl):
+ 
+                         if rv is not None:
+                             returnstatus = 'SPOOFED'
+-                            soa = dns.rrset.from_text(match, config['spoof_ttl'], 'IN', 6, 'spoofed.{0} {1}.{2}. {3} 60 60 60 60'.format(qname, qrdtype.lower(), spoof.rstrip('.').lower(), int(time.time())))
++                            soa = dns.rrset.from_text(matcha, config['spoof_ttl'], 'IN', 6, 'spoofed.{0} {1}.{2}. {3} 60 60 60 60'.format(qname, qrdtype.lower(), spoof.rstrip('.').lower(), int(time.time())))
+                             rv = (rv[0], rv[1], [soa], rv[3])
+ 
+                         else:

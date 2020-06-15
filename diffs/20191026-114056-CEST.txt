@@ -1,0 +1,279 @@
+diff --git a/deugniets.conf b/deugniets.conf
+index 283cb70..d68f21a 100644
+--- a/deugniets.conf
++++ b/deugniets.conf
+@@ -102,8 +102,8 @@ filter_request = true
+ filter_response = true
+ 
+ # UnFiltering - Make sure the queries come from DNS clients and not from a relay/proxy!
+-unfilter = false
+-unfilter_ttl = 120
++unfilter = true
++unfilter_ttl = 300
+ unfilter_whitelist = false
+ 
+ # Fix rcodes
+diff --git a/deugniets.py b/deugniets.py
+index 0289699..69d09ed 100644
+--- a/deugniets.py
++++ b/deugniets.py
+@@ -1,7 +1,7 @@
+ #!/usr/bin/env python3
+ '''
+ =======================================================================
+- deugniets.py v2.38-20191024 Copyright 2019 by cbuijs@chrisbuijs.com
++ deugniets.py v2.384-20191025 Copyright 2019 by cbuijs@chrisbuijs.com
+ =======================================================================
+ 
+  Based on: https://github.com/supriyo-biswas/adblock-dns-server
+@@ -94,8 +94,7 @@ from cache import CachedObject, CacheInventory
+ # Initialize caches
+ cache = CacheInventory(maxsize=65535, housekeeping=60, name='DNS-Cache')
+ listed_cache = CacheInventory(maxsize=16384, housekeeping=60, name='Label-Cache')
+-unfilter_ip_cache = CacheInventory(maxsize=512, housekeeping=60, name='UnFilter-IP')
+-unfilter_dom_cache = CacheInventory(maxsize=16384, housekeeping=60, name='UnFilter-DOM')
++unfilter_cache = CacheInventory(maxsize=512, housekeeping=60, name='UnFilter-IP')
+ 
+ # Lists
+ wl_dom = dict()
+@@ -123,6 +122,9 @@ command_acl4['127.0.0.1/32'] = True
+ command_acl4['192.168.0.0/16'] = True
+ command_acl6['0::1/128'] = True
+ 
++# vars
++dummy = '#!#!DUMMY!#!#'
++
+ # Domain Regex
+ is_dom = regex.compile('(?=^.{1,253}[a-z][\.]*$)(^((?!-)[a-z0-9_-]{0,62}[a-z0-9]\.)*(xn--[a-z0-9-]{1,59}|[a-z]{2,63})[\.]*$)', regex.I) # Including underscore
+ #is_dom = regex.compile('(?=^.{1,253}[a-z][\.]*$)(^((?!-)[a-z0-9-]{0,62}[a-z0-9]\.)*(xn--[a-z0-9-]{1,59}|[a-z]{2,63})[\.]*$)', regex.I)
+@@ -202,7 +204,7 @@ def add_list(domlist, addlist, comment):
+     for dom in addlist:
+         for entry in dom.split(','):
+             if is_dom.search(entry) and (dom not in domlist):
+-                logging.debug('WHITELIST-ADD: {0} ({1})'.format(entry, comment))
++                logging.debug('ADD-LIST: {0} ({1})'.format(entry, comment))
+                 domlist[dom] = entry
+     return domlist
+ 
+@@ -232,23 +234,41 @@ def undom(domlist1, domlist2, listname, onlysub):
+ 
+ 
+ def unreg(domlist, bigrx, listname):
+-    if domlist and bigrx and bigrx != regex.compile('#!#DUMMY#!#'):
++    if domlist and bigrx and bigrx != regex.compile(dummy):
+         logging.info('UNREG [{0}]: Optimizing List, removing REGEX matches ...'.format(listname))
++        remove = filter(bigrx.search, domlist.keys())
+         newdomlist = dict()
+         beforecount = len(domlist)
+         for dom in domlist:
+-            match = bigrx.search(dom.rstrip('.'))
+-            if match:
+-                logging.debug('UNREG [{0}]: Removed {1}'.format(listname, dom))
++            if dom in remove:
++                logging.info('UNREG [{0}]: Removed {1}'.format(listname, dom))
+             else:
+                 newdomlist[dom] = domlist[dom]
+-
++        
+         aftercount = len(newdomlist)
+         logging.info('UNREG [{0}]: Went from {1} to {2} entries ({3})'.format(listname, beforecount, aftercount, aftercount - beforecount))
++
+         return newdomlist
+ 
+     return domlist
+ 
++    #if domlist and bigrx and bigrx != regex.compile(dummy):
++    #    logging.info('UNREG [{0}]: Optimizing List, removing REGEX matches ...'.format(listname))
++    #    newdomlist = dict()
++    #    beforecount = len(domlist)
++    #    for dom in domlist:
++    #        match = bigrx.search(dom.rstrip('.'))
++    #        if match:
++    #            logging.debug('UNREG [{0}]: Removed {1}'.format(listname, dom))
++    #        else:
++    #            newdomlist[dom] = domlist[dom]
++    #
++    #    aftercount = len(newdomlist)
++    #    logging.info('UNREG [{0}]: Went from {1} to {2} entries ({3})'.format(listname, beforecount, aftercount, aftercount - beforecount))
++    #    return newdomlist
++    #
++    #return domlist
++
+ 
+ def unip(iplist1, iplist2, ip6, listname, allowsame):
+     name1, name2 = listname.split('-')[0:2]
+@@ -290,11 +310,14 @@ def unip(iplist1, iplist2, ip6, listname, allowsame):
+ 
+ def agg_ip(iplist, listname, fam):
+     logging.info('AGGREGATE-{0}-[{1}]: Aggregating List ...'.format(fam, listname))
+-    ips = list()
++    ipset = IPSet()
+     for ip in iplist:
+-        ips.append(IP(ip))
++        ipset.add(IP(ip))
+ 
+-    ipset = IPSet(ips) # Here is the magic
++    #ips = list()
++    #for ip in iplist:
++    #    ips.append(IP(ip))
++    #ipset = IPSet(ips) # Here is the magic
+ 
+     newlist = list()
+     for ip in ipset:
+@@ -757,11 +780,9 @@ def check_if_blacklisted(testvalue, valuetype, checkip):
+     if checkip is False and is_dom.search(testvalue):
+         #logging.debug('CHECK-{0}: \"{1}\" is a DOMAIN'.format(valuetype, testvalue))
+ 
+-        wmatch = check_dom(valuetype, testvalue, wl_dom, 'WHITELIST', False, False) # Whitelisted
+-        if wmatch:
+-            #if config['smartdoms']:
+-            #    if check_dom(valuetype, testvalue, bl_dom, 'BLACKLIST', False, True) or check_rx(valuetype, '{0}.'.format('.'.join(testvalue.rstrip('.').split('.')[0:-1])), bl_rx, 'BLACKLIST'): # Blacklisted
+-            #        return True
++        if check_dom(valuetype, testvalue, wl_dom, 'WHITELIST', False, False): # Whitelisted
++            if config['smartdoms'] and (check_dom(valuetype, testvalue, bl_dom, 'BLACKLIST', False, True) or check_rx(valuetype, testvalue, bl_rx, 'BLACKLIST')): # Blacklisted
++                return True
+ 
+             return False
+     
+@@ -881,7 +902,7 @@ def check_rx(valuetype, testvalue, rxlst, tag):
+         match = rxlst[rx].search(testvalue.rstrip('.'))
+         if match:
+             if config['log_hits']:
+-                logging.warning('{0}-{1}-RX-HIT: \"{2}\" matches \"{3}\"'.format(valuetype, tag, testvalue, testvalue[match.span()[0]:match.span()[1]] + ' - ' + rx))
++                logging.warning('{0}-{1}-RX-HIT: \"{2}\" matches \"{3}\"'.format(valuetype, tag, testvalue, rx))
+             return True
+             #return testvalue[match.span()[0]:match.span()[1]] + ' - ' + rx
+ 
+@@ -900,11 +921,12 @@ def check_dom(valuetype, testvalue, domlist, listname, onlyparent, smart):
+         return fqdn
+ 
+     if smart:
++        #valuetest = '{0}'.format('.'.join(testvalue.rstrip('.').split('.')[0:-1])) # Strip of last label to make sure we match against sub
+         valuetest = testvalue.rstrip('.')
+         while valuetest.count('.') > 1:
+             valuetest = '.'.join(valuetest.split('.')[:-1])
+             fqdn = check_dom_walk(valuetype, valuetest + '.', domlist, False, onlyparent)
+-            if fqdn:
++            if fqdn and fqdn.count('.') > 1:
+                 if config['log_hits'] and listname:
+                     logging.warning('{0}-SMARTDOM-HIT [{1}]: \"{2}\" -> \"{3}\"'.format(valuetype, listname, testvalue, fqdn))
+                 return fqdn
+@@ -1232,12 +1254,12 @@ def dns_query(name, rdclass, rdtype, qid, cip, unfilter, fttl):
+     if rv is None and config['filter_request'] and unfilter is False:
+         #logging.debug('REQUEST-QNAME-CHECK [{0}]: {1}'.format(qid, qname))
+ 
+-        match = is_blacklisted(qname, 'NAME', False) # Due first, faster due to caching of previous results
+-        if match is True:
++        wmatch = is_blacklisted(qname, 'NAME', False) # Due first, faster due to caching of previous results
++        if wmatch is True:
+             blacklistname = qname
+             returnstatus = 'BLACKLISTED'
+             rv = (config['blacklist_rcode'], [], [], [])
+-        elif match is False:
++        elif wmatch is False:
+             returnstatus = 'WHITELISTED'
+ 
+         #elif is_formerr('REQUEST', qname, qrdtype):
+@@ -1342,20 +1364,21 @@ def dns_query(name, rdclass, rdtype, qid, cip, unfilter, fttl):
+         ### !!! TODO: Optimize return of below NXDOMAIN and REFUSED to skip forwardinf and cache
+         match = check_dom('NAME', qname, forwarder, 'FORWARDER', False, False)
+         if match:
+-            chop = qname[:-len(match)]
+-            logging.debug('CHOP: {0} - {1}'.format(qname, chop))
+-            if is_blacklisted(chop, 'FORWARDER-CHOP-NAME', False):
+-                blacklistname = qname
+-                returnstatus = 'BLACKLISTED'
+-                rv = (config['blacklist_rcode'], [], [], [])
+-            else:
+-                fwdtag = 'SELECTIVE'
+-                addrs = ip_family(cachename, forwarder[match].split(','), cip)
+-                if cip in addrs:
+-                    logging.error('FORWARD-LOOP [{0}]: \"{1}\" from {2} (forwarder for {3})'.format(qid, cachename, cip, match))
+-                    return (dns.rcode.SERVFAIL, [], [], [])
+-
+-                forwarder[match] = ','.join(addrs)
++            #chop = qname[:-len(match)]
++            #logging.debug('CHOP: {0} - {1}'.format(qname, chop))
++            #if is_blacklisted(chop, 'FORWARDER-CHOP-NAME', False):
++            #    blacklistname = qname
++            #    returnstatus = 'BLACKLISTED'
++            #    rv = (config['blacklist_rcode'], [], [], [])
++            #else:
++
++            fwdtag = 'SELECTIVE'
++            addrs = ip_family(cachename, forwarder[match].split(','), cip)
++            if cip in addrs:
++                logging.error('FORWARD-LOOP [{0}]: \"{1}\" from {2} (forwarder for {3})'.format(qid, cachename, cip, match))
++                return (dns.rcode.SERVFAIL, [], [], [])
++
++            forwarder[match] = ','.join(addrs)
+ 
+         if rv is None and addrs is False:
+             match = 'DEFAULT'
+@@ -1675,8 +1698,7 @@ def dox_request(qid, qname, rdtype, cachename, urls, rfc8484):
+ def clear_caches():
+     cache.clear()
+     listed_cache.clear()
+-    unfilter_ip_cache.clear()
+-    unfilter_dom_cache.clear()
++    unfilter_cache.clear()
+     queryhits.clear()
+     gc.collect()
+     return True
+@@ -1879,27 +1901,21 @@ def handle_query(raw_data, client_ip):
+         unfilter = False
+ 
+         if config['unfilter'] and (check_dom('NAME', name, forwarder, False, False, False) is False):
+-            if cip in unfilter_ip_cache:
++            if cip in unfilter_cache or name in unfilter_cache:
+                 unfilter = True
+-                obj = unfilter_ip_cache.info(name=cip)
+-                expires = obj.timestamp + obj.ttl
+-                left = int(expires - time.time())
+-                logging.info('UNFILTER-QUERY [{0}]: From {1} for {2} (TIME-LEFT: {3} Secs)'.format(query.id, cip, queryname, left))
+ 
+             elif (cip in ul_ip4 or cip in ul_ip6):
+                 unfilter = True
+                 logging.info('UNFILTER-IP [{0}]: {1}'.format(query.id, cip))
+-                unfilter_ip_cache.add(obj=CachedObject(name=cip, obj=True, ttl=604800)) # 7 days
++                unfilter_cache.add(obj=CachedObject(name=cip, obj=True, ttl=604800)) # 7 days
+ 
+             else:
+                 match = check_dom('NAME', name, ul_dom, 'UNFILTER', False, False)
+-                if match is False and config['unfilter_whitelist']:
+-                    match = check_dom('NAME', name, wl_dom, False, False, False)
+ 
+                 if match:
+                     unfilter = True
+-                    unfilter_ip_cache.add(obj=CachedObject(name=cip, obj=True, ttl=config['unfilter_ttl']))
+-                    logging.info('UNFILTER-QUERY-INIT [{0}]: From {1} for {2} ({3})'.format(query.id, cip, queryname, match))
++                    unfilter_cache.add(obj=CachedObject(name=name, obj=True, ttl=config['unfilter_ttl']))
++                    logging.info('UNFILTER-NAME [{0}]: From {1} for {2} ({3})'.format(query.id, cip, queryname, match))
+ 
+         result = dns_query(name, rdclass, rdtype, query.id, cip, unfilter, False)
+ 
+@@ -2171,8 +2187,8 @@ if __name__ == '__main__':
+         config['tld_rcode'] = dns.rcode.from_text(config['tld_rcode'])
+ 
+     # Create combined regex for speed
+-    wl_big_rx = regex.compile('#!#DUMMY#!#')
+-    bl_big_rx = regex.compile('#!#DUMMY#!#')
++    wl_big_rx = regex.compile(dummy)
++    bl_big_rx = regex.compile(dummy)
+     tld_rx = regex.compile('^.*[\.]*$', regex.I)
+ 
+     # Read lists
+@@ -2200,9 +2216,12 @@ if __name__ == '__main__':
+         wl_dom, wl_ip4, wl_ip6, wl_rx, ul_dom, ul_ip4, ul_ip6 = read_list(config['whitelist'], 'WhiteList', wl_dom, wl_ip4, wl_ip6, wl_rx, ul_dom, ul_ip4, ul_ip6)
+         bl_dom, bl_ip4, bl_ip6, bl_rx, _, _, _ = read_list(config['blacklist'], 'BlackList', bl_dom, bl_ip4, bl_ip6, bl_rx, dict(), dict(), dict())
+ 
++        if config['unfilter_whitelist']:
++            ul_dom = add_list(ul_dom, wl_dom.keys(), 'UNFILTER-WHITELIST')
++
+         wl_dom = add_list(wl_dom, alias.keys(), 'ALIAS-SOURCE')
+         wl_dom = add_list(wl_dom, alias.values(), 'ALIAS-TARGET')
+-        wl_dom = add_list(wl_dom, forwarder, 'FORWARD-DOMAIN')
++        wl_dom = add_list(wl_dom, forwarder.keys(), 'FORWARD-DOMAIN')
+ 
+         try:
+             #wl_big_rx = regex.compile('|'.join('(?:{0})'.format(x) for x in wl_rx.values()), regex.I)

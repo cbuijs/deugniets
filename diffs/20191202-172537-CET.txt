@@ -1,0 +1,282 @@
+diff --git a/deugniets.py b/deugniets.py
+index 2d31730..facd8e2 100644
+--- a/deugniets.py
++++ b/deugniets.py
+@@ -1,7 +1,7 @@
+ #!/usr/bin/env python3
+ '''
+ =======================================================================
+- deugniets.py v2.595-20191126 Copyright 2019 by cbuijs@chrisbuijs.com
++ deugniets.py v2.597-20191202 Copyright 2019 by cbuijs@chrisbuijs.com
+ =======================================================================
+ 
+  Based on: https://github.com/supriyo-biswas/adblock-dns-server
+@@ -52,7 +52,7 @@ import ssl
+ import dns.rcode
+ import dns.flags
+ import dns.message
+-import dns.opcode
++#import dns.opcode
+ import dns.resolver
+ import dns.rdatatype
+ import dns.exception
+@@ -186,10 +186,10 @@ def _getaddrinfo(host, port=53, family=0, type=0, proto=0, flags=0):
+     if result is None:
+         tag = 'CACHED'
+         result = _socket.getaddrinfo(host, port, family, type, proto, flags)
+-        cache.add(obj=CachedObject(name=cachename, obj=result, ttl=2400)) # Cache 40 mins, see: https://blog.apnic.net/2019/11/12/stop-using-ridiculously-low-dns-ttls/
++        cache.add(obj=CachedObject(name=cachename, obj=result, ttl=config['min_ttl'])) # Cache 40 mins, see: https://blog.apnic.net/2019/11/12/stop-using-ridiculously-low-dns-ttls/
+ 
+-    ips = list((map(lambda x: x[4][0], result)))
+-    logging.info('GETADDRINFO-{0}: {1} -> {2}'.format(tag, host, ', '.join(ips)))
++    #ips = list((map(lambda x: x[4][0], result)))
++    #logging.debug('GETADDRINFO-{0}: {1} -> {2}'.format(tag, host, ', '.join(ips)))
+     return result
+ 
+ socket.getaddrinfo = _getaddrinfo
+@@ -357,11 +357,15 @@ def make_doms(domlist):
+     newdomlist = set()
+     for dom in domlist:
+         if is_dom.search(dom):
+-            newdomlist.add(dom.strip('.') + '.')
++            newdomlist.add(make_dom(dom))
+ 
+     return newdomlist
+ 
+ 
++def make_dom(domname):
++    return '{0}.'.format(domname.strip('.').lower())
++
++
+ #def similar(x, y):
+ #    return int(SequenceMatcher(None, x, y).ratio() * 100)
+ 
+@@ -397,7 +401,7 @@ def read_list(filenames, listname, domlst, ip4lst, ip6lst, rxlst, unlst, unip4,
+                         ip6lst[entry] = entry
+ 
+                     elif (config['filter_request'] or config['filter_response']) and is_dom.search(entry):
+-                        domlst[entry.strip('.').lower() + '.'] = entry
++                        domlst[make_dom(entry)] = entry
+ 
+                     elif (config['filter_request'] or config['filter_response']) and is_domword.search(entry):
+                         try:
+@@ -422,7 +426,7 @@ def read_list(filenames, listname, domlst, ip4lst, ip6lst, rxlst, unlst, unip4,
+                             value = value.upper()
+ 
+                         if domain and value:
+-                            domain = domain.lower().strip('.') + '.'
++                            domain = make_dom(domain)
+                             logging.debug('SPOOF: {0} redirect to {1}'.format(domain, ', '.join(value.split(','))))
+                             alias[domain] = value
+                         else:
+@@ -431,7 +435,7 @@ def read_list(filenames, listname, domlst, ip4lst, ip6lst, rxlst, unlst, unip4,
+                     elif is_forwarder.search(entry):
+                         domain, value = get_value(entry, '>', is_ip.search, False)
+                         if domain and value:
+-                            domain = domain.lower().strip('.') + '.'
++                            domain = make_dom(domain)
+                             logging.debug('FORWARDER: {0} forward to {1}'.format(domain, ', '.join(value.lower().split(','))))
+                             forwarder[domain] = value.lower()
+                         else:
+@@ -440,7 +444,7 @@ def read_list(filenames, listname, domlst, ip4lst, ip6lst, rxlst, unlst, unip4,
+                     elif is_ttl.search(entry):
+                         domain, value = get_value(entry, '!', None, False)
+                         if domain and value:
+-                            domain = domain.lower().strip('.') + '.'
++                            domain = make_dom(domain)
+                             logging.debug('TTL: {0} = {1}'.format(domain, value))
+                             forcettl[domain] = int(value)
+                         else:
+@@ -449,8 +453,8 @@ def read_list(filenames, listname, domlst, ip4lst, ip6lst, rxlst, unlst, unip4,
+                     elif config['unfilter'] and entry.startswith('+'):
+                         domip = entry.lstrip('+')
+                         if is_dom.search(domip):
+-                            logging.debug('UNFILTER-DOM: {0}'.format(domip.strip('.').lower() + '.'))
+-                            unlst[domip.strip('.').lower() + '.'] = entry
++                            logging.debug('UNFILTER-DOM: {0}'.format('{0}.'.format(domip.strip('.').lower())))
++                            unlst[make_dom(domip)] = entry
+ 
+                         elif is_ip4.search(domip):
+                             logging.debug('UNFILTER-IPV4: {0}'.format(domip))
+@@ -488,14 +492,14 @@ def read_list(filenames, listname, domlst, ip4lst, ip6lst, rxlst, unlst, unip4,
+ 
+ 
+ def get_value(entry, sepp, filt, addvalue):
+-    elements = regex.split('\s*' + sepp + '\s*', entry)
++    elements = regex.split('\s*{0}\s*'.format(sepp), entry)
+     if elements:
+         param = elements[0].lower()
+         if param:
+             values = ','.join(list(filter(filt, regex.split('\s*,\s*', ','.join(elements[1:])))))
+             if values:
+                 if addvalue:
+-                    values = addvalue + ',' + values
++                    values = '{0},{1}'.format(addvalue, values)
+                 return param, values
+ 
+     return False, False
+@@ -598,20 +602,22 @@ def rev_ip(ip, delimiter):
+         if is_ip4.search(eip):
+             #if prefix in (8, 16, 24, 32):
+             if int(prefix) % 8 == 0:
+-                revip = '.'.join(eip.split('.')[0:int(prefix / 8)][::-1]) + '.in-addr.arpa.'
++                revip = '{0}.in-addr.arpa.'.format('.'.join(eip.split('.')[0:int(prefix / 8)][::-1]))
++                
+             elif delimiter:
+                 octs = eip.split('.')[::-1]
+                 octs[3 - int(prefix / 8)] = octs[3 - int(prefix / 8)] + delimiter + str(prefix)
+                 revip = '.'.join(octs[3 - int(prefix / 8):]) + '.in-addr.arpa.'
++                revip = '{0}.in-addr.arpa.'.format('.'.join(octs[3 - int(prefix / 8):]))
+ 
+         elif is_ip6.search(eip):
+             #if prefix in (4, 8, 12, 16, 20, 24, 28, 32, 36, 40, 44, 48, 52, 56, 60, 64, 68, 72, 76, 80, 84, 88, 92, 96, 100, 104, 108, 112, 116, 120, 124, 128):
+             if int(prefix) % 4 == 0:
+-                revip = '.'.join(filter(None, regex.split('(.)', regex.sub(':', '', eip))))[0:int(prefix / 4) * 2][::-1].strip('.') + '.ip6.arpa.'
++                revip = '{0}.ip6.arpa.'.format('.'.join(filter(None, regex.split('(.)', regex.sub(':', '', eip))))[0:int(prefix / 4) * 2][::-1].strip('.'))
+             elif delimiter:
+                 nibs = filter(None, regex.split('(.)', regex.sub(':', '', eip)))[::-1]
+                 nibs[31 - int(prefix / 4)] = nibs[31 - int(prefix / 4)] + delimiter + str(prefix)
+-                revip = '.'.join(nibs[31 - int(prefix /4):]) + '.ip6.arpa.'
++                revip = '{0}.ip6.arpa.'.format('.'.join(nibs[31 - int(prefix /4):]))
+ 
+     return revip
+ 
+@@ -627,7 +633,7 @@ def expand_ip(ip):
+     if '/' in new_ip:
+         new_ip, prefix = new_ip.split('/')[0:2]
+         if new_ip.endswith(':'):
+-            new_ip = new_ip + '0'
++            new_ip = '{0}0'.format(new_ip)
+ 
+     if '::' in new_ip:
+         padding = 9 - new_ip.count(':')
+@@ -640,7 +646,7 @@ def expand_ip(ip):
+     new_ip = ':'.join(parts)
+ 
+     if prefix:
+-        new_ip = new_ip + '/' + prefix
++        new_ip = '{0}/{1}'.format(new_ip, prefix)
+ 
+     #logging.debug('IPV6-EXPANDER: {0} -> {1}'.format(ip, new_ip))
+ 
+@@ -928,7 +934,6 @@ def check_rx(valuetype, testvalue, rxlst, tag):
+             if config['log_hits']:
+                 logging.warning('{0}-{1}-RX-HIT: \"{2}\" matches \"{3}\"'.format(valuetype, tag, testvalue, rx))
+             return True
+-            #return testvalue[match.span()[0]:match.span()[1]] + ' - ' + rx
+ 
+     return False
+ 
+@@ -961,7 +966,7 @@ def check_dom(valuetype, testvalue, domlist, listname, onlyparent, smart):
+ def check_dom_walk(valuetype, testvalue, domlist, listname, onlyparent):
+     fqdn = ''
+     for label in filter(None, testvalue.strip('.').split('.')[::-1]):
+-        fqdn = label + '.' + fqdn
++        fqdn = '{0}.{1}'.format(label, fqdn)
+         if onlyparent and fqdn == testvalue:
+             return False
+ 
+@@ -1078,7 +1083,7 @@ def dnsl_check(dnsl, value, isip):
+ 
+                 if qname:
+                     servicename = servicename.upper()
+-                    cachename = qname + '/IN/A'
++                    cachename = '{0}/IN/A'.format(qname)
+                     qid = random.randint(1025, 65535)
+                     if config['log_requests']:
+                         logging.info('DNSL-CHECK-{0} [{2}]: {3} ({4}) on {1}'.format(tag, servicename, qid, value, qname))
+@@ -1142,17 +1147,18 @@ def dns_query(name, rdclass, rdtype, qid, cip, unfilter, fttl):
+     qrdtype = str(dns.rdatatype.to_text(rdtype))
+     cip = str(cip)
+ 
+-    cachename = qname + '/IN/' + qrdtype
++    cachename = '{0}/IN/{1}'.format(qname, qrdtype)
+ 
+-    if is_ip4.search(cip) and (not cip in wl_ip4) and (cip in bl_ip4):
++    if is_ip4.search(cip) and (cip not in wl_ip4) and (cip in bl_ip4):
+         logging.warning('ACL-BLACKLIST-HIT [{0}]: Client {1} -> {2}'.format(qid, cip, bl_ip4.get_key(cip)))
+         return (dns.rcode.REFUSED, [], [], [])
+ 
+-    if is_ip6.search(cip) and (not cip in wl_ip6) and (cip in bl_ip6):
++    if is_ip6.search(cip) and (cip not in wl_ip6) and (cip in bl_ip6):
+         logging.warning('ACL-BLACKLIST-HIT [{0}]: Client {1} -> {2}'.format(qid, cip, bl_ip6.get_key(cip)))
+         return (dns.rcode.REFUSED, [], [], [])
+ 
+-    if config['abuseipdbkey'] and is_ip.search(cip) and (not cip in wl_ip4) and (not cip in wl_ip6):
++    # !!!! BROKEN - FIX - LOOKSUP WL_IP AS WELL !!!!
++    if config['abuseipdbkey'] and is_ip.search(cip) and (cip not in wl_ip4) and (cip not in wl_ip6):
+           score = False
+ 
+           if cip.find(':') > 0 :
+@@ -1166,7 +1172,15 @@ def dns_query(name, rdclass, rdtype, qid, cip, unfilter, fttl):
+               score = abuse_ip.get(cip)
+ 
+           else:
+-              ipcheck = ipdb.check(cip)
++              ipcheck = False
++
++              try:
++                  ipcheck = ipdb.check(cip)
++
++              except BaseException as err:
++                  logging.error('ABUSEIPDB-ERROR: {0} - {1}'.format(cip, err))
++                  ipcheck = False
++
+               if ipcheck:
+                   logging.info('ABUSEIPDB-CHECK: {0}'.format(cip))
+                   score = ipcheck.abuseConfidenceScore
+@@ -1180,6 +1194,7 @@ def dns_query(name, rdclass, rdtype, qid, cip, unfilter, fttl):
+               bl_ip[cip] = True
+               return (dns.rcode.REFUSED, [], [], [])
+ 
++
+     if qrdtype == 'ANY' and config['blockany']:
+         logging.warning('BLOCK-ANY-HIT [{0}]: {1}'.format(qid, cachename))
+         return (dns.rcode.REFUSED, [], [], [])
+@@ -1199,8 +1214,7 @@ def dns_query(name, rdclass, rdtype, qid, cip, unfilter, fttl):
+         return (dns.rcode.FORMERR, [], [], [])
+ 
+     if unfilter:
+-        #cachename = cachename + '/UNFILTERED'
+-        cachename = cachename + '/' + str(cip)
++        cachename = '{0}/{1}'.format(cachename, cip)
+ 
+     rv = None
+     returnstatus = 'OK'
+@@ -1349,7 +1363,7 @@ def dns_query(name, rdclass, rdtype, qid, cip, unfilter, fttl):
+             match = check_dom('NAME', qname, alias, 'ALIAS', False, False)
+             if match:
+                 spoof = alias[match]
+-                if spoof != qname and (not qname in beingspoofed) and (not check_dom('NAME', qname, beingspoofed, 'SPOOFER-CHECKER', False, False)):
++                if spoof != qname and (qname not in beingspoofed) and (not check_dom('NAME', qname, beingspoofed, 'SPOOFER-CHECKER', False, False)):
+                     beingspoofed.add(qname)
+ 
+                     if config['log_responses']:
+@@ -1379,7 +1393,7 @@ def dns_query(name, rdclass, rdtype, qid, cip, unfilter, fttl):
+                     elif is_dom.search(spoof):
+                         rcode = False
+                         qresponse = False
+-                        spoof = spoof.rstrip('.') + '.'
++                        spoof = make_dom(spoof)
+                         rcode, qresponse = dns_query(spoof, 1, rdtype, random.randint(1025, 65535), 'SPOOFER', False, False)[0:2]
+ 
+                         if rcode == dns.rcode.NOERROR and qresponse:
+@@ -1961,14 +1975,12 @@ def handle_query(raw_data, client_ip):
+ 
+     cip = str(client_ip)
+     rdclass = query.question[0].rdclass
++    rdclasst = dns.rdataclass.to_text(rdclass)
+     rdtype = query.question[0].rdtype
+-    queryname = name + '/' + dns.rdataclass.to_text(rdclass) + '/' + dns.rdatatype.to_text(rdtype)
+-    bname = name + '/' + dns.rdataclass.to_text(rdclass) + '/*'
++    rdtypet = dns.rdatatype.to_text(rdtype)
++    queryname = '{0}/{1}/{2}'.format(name, rdclasst, rdtypet)
++    bname = '{0}/{1}/*'.format(name, rdclasst)
+ 
+-    #if rdtype in (1, 28, 5, 15, 2, 12, 33): # A, AAAA, CNAME, MX, NS, PTR and SRV
+-    #    bname = name + '/' + dns.rdataclass.to_text(rdclass) + '/*'
+-    #else:
+-    #    bname = queryname
+ 
+     if queryname in queryhits:
+         queryhits[queryname] += 1

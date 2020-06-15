@@ -1,0 +1,299 @@
+diff --git a/deugniets.py b/deugniets.py
+index 2217ffc..f0b0c79 100644
+--- a/deugniets.py
++++ b/deugniets.py
+@@ -1,8 +1,8 @@
+ #!/usr/bin/env python3
+ '''
+-=======================================================================
+- deugniets.py v2.642-20191219 Copyright 2019 by cbuijs@chrisbuijs.com
+-=======================================================================
++===========================================================================
++ deugniets.py v2.65-20200102 Copyright 2019-2020 by cbuijs@chrisbuijs.com
++===========================================================================
+ 
+  Based on: https://github.com/supriyo-biswas/adblock-dns-server
+            https://github.com/cbuijs/instigator
+@@ -25,7 +25,11 @@
+  - Listen on DoT (853) and DoH (443) - SSL/Certificate config
+  - Check/Investigate/Use Twisted names framework
+ 
+-=====================================================================
++Done:
++
++ - NextDNS supported out of the box
++
++===========================================================================
+ '''
+ 
+ # System
+@@ -101,7 +105,7 @@ from cache import CachedObject, CacheInventory
+ cache = CacheInventory(maxsize=65535, housekeeping=60, name='DNS-Cache')
+ listed_cache = CacheInventory(maxsize=16384, housekeeping=60, name='Label-Cache')
+ unfilter_cache = CacheInventory(maxsize=512, housekeeping=60, name='UnFilter')
+-geo_cache = CacheInventory(maxsize=65535, housekeeping=60, name='GEO-Cache')
++geo_cache = CacheInventory(maxsize=8192, housekeeping=60, name='GEO-Cache')
+ 
+ # Lists
+ wl_dom = dict()
+@@ -198,6 +202,7 @@ def _getaddrinfo(host, port=53, family=0, type=0, proto=0, flags=0):
+     if result is None:
+         tag = 'CACHED'
+         result = _socket.getaddrinfo(host, port, family, type, proto, flags)
++        #logging.info('GETADDRINFO-RESULT: {0}'.format(result))
+         cache.add(obj=CachedObject(name=cachename, obj=result, ttl=config['min_ttl'])) # Cache 40 mins, see: https://blog.apnic.net/2019/11/12/stop-using-ridiculously-low-dns-ttls/
+ 
+     ips = list((map(lambda x: x[4][0], result)))
+@@ -334,7 +339,7 @@ def unip(iplist1, iplist2, ip6, listname, allowsame):
+             if match is False:
+                 newiplist[ip] = iplist1[ip]
+             else:
+-                logging.debug('UNIP-{0} [{1}]: Removed {2} {3} matches {4} {5}'.format(fam, listname, ip, name1, name2, match))
++                logging.debug('UNIP-{0} [{1}]: Removed {2} {3} matches {4} {5}'.format(fam, listname, ip, name1, match, name2))
+ 
+         aftercount = len(newiplist)
+         logging.info('UNIP-{0} [{1}]: Went from {2} to {3} entries ({4})'.format(fam, listname, beforecount, aftercount, aftercount - beforecount))
+@@ -352,8 +357,7 @@ def agg_ip(iplist, listname, fam):
+     else:
+         new = pytricia.PyTricia(128, socket.AF_INET6)
+ 
+-    for ip in netaddr.cidr_merge(list(iplist)):
+-        ip = str(ip)
++    for ip in list(map(str, netaddr.cidr_merge(list(iplist)))):
+         new[ip] = True
+         if ip not in iplist:
+             logging.info('AGGREGATE-{0}-[{1}]: Removed {2} due to summarization'.format(fam, listname, ip))
+@@ -425,7 +429,7 @@ def read_list(filenames, listname, domlst, ip4lst, ip6lst, rxlst, unlst, unip4,
+ 
+                     elif (config['filter_request'] or config['filter_response']) and is_geo.search(entry):
+                         entry = entry.lstrip('@')
+-                        geolst[regex.sub('\s+', '', entry.upper())] = entry
++                        geolst[regex.sub('[^a-zA-Z0-9]+', '', entry.upper())] = entry
+ 
+                     elif is_alias.search(entry):
+                         datatype = False
+@@ -640,6 +644,7 @@ def rev_ip(ip, delimiter):
+ 
+ def expand_ip(ip):
+     '''Expand IPv6 addresses'''
++    ip = str(ip)
+     if not is_ip6.search(ip):
+         return ip
+ 
+@@ -1153,7 +1158,7 @@ def check_badip(cip):
+ 
+                 if score and score > 90:
+                     if config['log_hits']:
+-                        logging.warning('ABUSEIPDB-BLACKLIST-HIT: Score for Client {0} = {1}%'.format(cip, score))
++                        logging.warning('ABUSEIPDB-BLACKLIST-HIT: Score for Client {0} = {1}% ({2})'.format(cip, score, geo(cip)))
+                     bl_ip[cip] = True
+                     beingchecked.discard(cip)
+                     return True
+@@ -1828,9 +1833,9 @@ def dox_request(qid, qname, rdtype, cachename, urls, rfc8484, cip):
+ 
+     if config['use_ecs_ip'] and cip and is_ip.search(cip):
+         if cip.find(':') > 0:
+-            bits = 64
++            bits = 64 #128
+         else:
+-            bits = 24
++            bits = 24 #32
+ 
+         ocip = IP(cip).make_net(str(bits)).strNormal(0)
+ 
+@@ -1855,7 +1860,7 @@ def dox_request(qid, qname, rdtype, cachename, urls, rfc8484, cip):
+                     message.id = 0 # DoH requests this
+                     rcode = 500
+ 
+-                    if rfc8484: # Use GET
++                    if rfc8484 and (not config['nextdns']): # Use GET
+                         if config['log_forwards']:
+                             logging.info('DOH-QUERY-GET [#{0}]: Query for {1}/IN/{2} to {3}'.format(retries, qname, dns.rdatatype.to_text(rdtype), url))
+ 
+@@ -2055,7 +2060,7 @@ def log_response(qname, qtype, answer, rcode, tag, spoofedname, qid):
+                                 logging.info('{0} [{1}:{2}/{3}-{4}/{5}#{6}]: {7} {8} IN {9} {10} (COLLAPSE-CANDIDATE)'.format(tag, qid, rrsetcount, rrsetcounttotal, rrcount, rrcounttotal, count, rrset.name, rrset.ttl, rdtype, rr))
+                             else:
+                                 if rdtype in ('A', 'AAAA'):
+-                                    logging.info('{0} [{1}:{2}/{3}-{4}/{5}#{6}]: {7} {8} IN {9} {10} ({11})'.format(tag, qid, rrsetcount, rrsetcounttotal, rrcount, rrcounttotal, count, rrset.name, rrset.ttl, rdtype, rr, geo(rr)))
++                                    logging.info('{0} [{1}:{2}/{3}-{4}/{5}#{6}]: {7} {8} IN {9} {10} ({11})'.format(tag, qid, rrsetcount, rrsetcounttotal, rrcount, rrcounttotal, count, rrset.name, rrset.ttl, rdtype, expand_ip(rr), geo(rr)))
+                                 else:
+                                     logging.info('{0} [{1}:{2}/{3}-{4}/{5}#{6}]: {7} {8} IN {9} {10}'.format(tag, qid, rrsetcount, rrsetcounttotal, rrcount, rrcounttotal, count, rrset.name, rrset.ttl, rdtype, rr))
+         elif rcode == 'NOERROR':
+@@ -2077,34 +2082,37 @@ def make_response(query):
+ 
+ 
+ def geo(client_ip):
+-    cip = str(client_ip)
++    cip = expand_ip(client_ip).split('/')[0]
++    ip6 = False
++    if cip.find(':') > 0:
++        ip6 = True
++
+     response = geo_cache.get(cip)
+     if response:
+         return response
+ 
+-    ip6 = False
+-    response = '-/-/-/-'
++    response = '?/?/?/?'
+ 
+     if config['geodb'] and is_ip.search(cip):
+-        if cip.find(':') > 0:
+-            ip6 = True
++        if cip in ('0.0.0.0', '0000:0000:0000:0000:0000:0000:0000:0000'):
++            response = '?/?/?/LOCALNET'
+ 
+-        if cip in ('127.0.0.1', '::1'):
+-            response = '-/-/-/LOCALHOST'
++        elif cip in ('127.0.0.1', '0000:0000:0000:0000:0000:0000:0000:0001'):
++            response = '?/?/?/LOCALHOST'
+ 
+         elif (ip6 is False and cip in private4) or (ip6 is True and cip in private6):
+-            response = '-/-/-/PRIVATE'
++            response = '?/?/?/PRIVATE'
+ 
+         else:
+             try:
+                 gip = geoip.city(cip)
+                 if gip:
+-                    response = regex.sub('\s+', '', '{0}/{1}/{2}/{3}'.format(gip.city.name or '-', gip.subdivisions.most_specific.name or '-', gip.country.name or '-', gip.continent.name or '-')).upper()
++                    response = regex.sub('[^a-zA-Z0-9\/\?]+', '', '{0}/{1}/{2}/{3}'.format(gip.city.name or '?', gip.subdivisions.most_specific.name or '?', gip.country.name or '?', gip.continent.name or '?')).upper()
+             except:
+                 pass
+ 
+-    if response == '-/-/-/-':
+-        response = '-/-/-/UNKNOWN'
++    if response == '?/?/?/?':
++        response = '?/?/?/UNKNOWN'
+ 
+     geo_cache.add(obj=CachedObject(name=cip, obj=response, ttl=43200)) # 12 hours
+     return response
+@@ -2314,6 +2322,8 @@ def run_server():
+ 
+     ### TLS: https://stackoverflow.com/questions/46964122/how-to-create-a-tlslite-ng-server-with-tls-1-3-support-only
+ 
++    global requests_session
++
+     dnsport = int(config['port'])
+ 
+     logging.info('SERVER: DeugNietS Starting on port {0}'.format(dnsport))
+@@ -2330,20 +2340,72 @@ def run_server():
+ 
+     logging.info('SERVER: DeugNietS Started - Accepting DNS requests on port {0}'.format(dnsport))
+ 
+-    # !!! TODO: Define bootstrap servers to use to resolve below
+     newnameservers = list()
+-    for dnsserver in config['nameservers']:
+-        if dnsserver.startswith('tls://') and dnsserver.find('#') == -1:
+-            hostname = dnsserver.split('/')[2]
+-            ips = list((map(lambda x: x[4][0], socket.getaddrinfo('{0}.'.format(hostname.rstrip('.')), 53, type=socket.SOCK_STREAM))))
+-            logging.info('TLS-RESOLUTION: {0} -> {1}'.format(hostname, ', '.join(ips)))
+-            for ip in ips:
+-                #logging.debug('TLS-SERVER: {0} added {1}'.format(hostname, ip))
+-                newentry = 'tls://{0}#{1}'.format(hostname, ip)
+-                newnameservers.append(newentry)
++    if config['nextdns']:
++        url = 'https://router.nextdns.io'
++
++        url += '?stack=dual'
++        if config['nextdns_hpm']:
++            url += '&hardened_privacy=1'
++
++        rcode = False
++        try:
++            logging.info('NEXTDNS-FETCH: {0}'.format(url))
++            r = requests_session.get(url, timeout=5, allow_redirects=False, proxies=None, stream=True)
++            if r:
++                rcode = r.status_code
++        except BaseException as err:
++            logging.error('NEXTDNS-ERROR-GET-SERVERS: {0} - {1}'.format(url, err))
++
++        if rcode and rcode == 200:
++            config['roundrobin'] = False
++            body = json.loads(r.text)
++            if body:
++                for server in range(0, len(body)):
++                    dnshost = body[server]['hostname']
++                    dnsurl = 'https://{0}'.format(dnshost)
++                    dnsips = body[server]['ips']
++        
++                    if config['nextdns_config']:
++                        dnsurl += '/{0}'.format(config['nextdns_config'])
++
++                    if config['nextdns_id']:
++                        dnsurl += '/{0}'.format(regex.sub('\s+', '%20', config['nextdns_id']))
+ 
++
++                    logging.info('NEXTDNS-SERVER: {0} ({1})'.format(dnsurl, ', '.join(dnsips)))
++                    newnameservers.append(dnsurl)
++                    cachednshost = '{0}/443/GETADDRINFO'.format(dnshost)
++                    for ip in dnsips:
++                        getaddrinfo = []
++                        if ip.find(':') > 0:
++                            getaddrinfo.append((10, 1, 6, '', (ip, 443, 0, 0)))
++                        else:
++                            getaddrinfo.append((2, 1, 6, '', (ip, 443)))
++
++                        #logging.info('NEXTDNS-GETADDR-CACHE: {0}'.format(getaddrinfo))
++                        cache.add(obj=CachedObject(name=cachednshost, obj=getaddrinfo, ttl=604800)) # 7 Days
++
++            else:
++                logging.error('NEXTDNS-ERROR-GET-SERVERS: {0} - Empty Response'.format(url))
+         else:
+-            newnameservers.append(dnsserver)
++            logging.error('NEXTDNS-ERROR-GET-SERVERS: {0} - RCODE={1}'.format(url, rcode))
++
++
++    else:
++        # !!! TODO: Define bootstrap servers to use to resolve below
++        for dnsserver in config['nameservers']:
++            if dnsserver.startswith('tls://') and dnsserver.find('#') == -1:
++                hostname = dnsserver.split('/')[2]
++                ips = list((map(lambda x: x[4][0], socket.getaddrinfo('{0}.'.format(hostname.rstrip('.')), 53, type=socket.SOCK_STREAM))))
++                logging.info('TLS-RESOLUTION: {0} -> {1}'.format(hostname, ', '.join(ips)))
++                for ip in ips:
++                    #logging.debug('TLS-SERVER: {0} added {1}'.format(hostname, ip))
++                    newentry = 'tls://{0}#{1}'.format(hostname, ip)
++                    newnameservers.append(newentry)
++
++            else:
++                newnameservers.append(dnsserver)
+ 
+     if newnameservers:
+         config['nameservers'] = newnameservers
+@@ -2387,7 +2449,7 @@ if __name__ == '__main__':
+     config['abuseipdbkey'] = False
+ 
+     # GeoIP DB
+-    config['geodb'] = '/opt/deugniets/GeoLite2-City.mmdb'
++    config['geodb'] = '/usr/share/GeoIP/GeoLite2-City.mmdb'
+ 
+     # Cache Settings
+     config['blacklist_cache_ttl'] = 60
+@@ -2494,6 +2556,12 @@ if __name__ == '__main__':
+     # Useragent
+     config['useragent'] = 'DEUGNIETS/2.x'
+ 
++    # Use NEXTDNS
++    config['nextdns'] = False
++    config['nextdns_hpm'] = True # Hardenend Privacy Mode
++    config['nextdns_config'] = ''
++    config['nextdns_id'] = 'DEUGNIETS'
++
+     # Get config
+     if len(sys.argv) < 2:
+         config = get_config(config, 'deugniets.conf')
+diff --git a/geo-update.sh b/geo-update.sh
+index 41de089..85c7a75 100755
+--- a/geo-update.sh
++++ b/geo-update.sh
+@@ -2,7 +2,8 @@
+ 
+ cd /opt/deugniets
+ 
+-wget -4 "https://geolite.maxmind.com/download/geoip/database/GeoLite2-City.tar.gz" -O GeoLite2-City.tar.gz
++#wget -4 "https://geolite.maxmind.com/download/geoip/database/GeoLite2-City.tar.gz" -O GeoLite2-City.tar.gz
++wget -4 "https://download.maxmind.com/app/geoip_download_by_token?edition_id=GeoLite2-City&token=v2.local.jURBhaN7zF26t-r1i0aGUoM4loXqLHr2wileNa9uUjNckshoE5hY-pqjBEYMOkcCjpvalxOiYVO499NSymI_ULPnv4T_vS-jB0-J1hxG5vu21TPnrCFhA6V-Jm4kfq1Vkn14qPfc6R_hF2LedeybUe2YXUiYzQtTXjyhzOddF7aQVnyVYsjgO46EGhCCzdz8zGWmY4io&suffix=tar.gz" -O GeoLite2-City.tar.gz
+ rm -f *.mmdb
+ tar --strip-components=1 --wildcards --overwrite -zxvf GeoLite2-City.tar.gz *.mmdb
+ rm -f GeoLite2-City.tar.gz

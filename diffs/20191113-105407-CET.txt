@@ -1,0 +1,129 @@
+diff --git a/deugniets.conf b/deugniets.conf
+index af11e1f..bfea4b2 100644
+--- a/deugniets.conf
++++ b/deugniets.conf
+@@ -29,8 +29,9 @@ port = 53001
+ #nameservers = ["127.0.0.1", "::1"]
+ 
+ #nameservers = ["https://ipv4.dns.nextdns.io/126ab2/nuc-deugniets-https4", "https://ipv6.dns.nextdns.io/126ab2/nuc-deugniets-https6", "45.90.28.131", "45.90.30.131", "2a07:a8c0::12:6ab2", "2a07:a8c1::12:6ab2"]
++nameservers = ["https://ipv4.dns.nextdns.io/126ab2/nuc-deugniets-https4", "https://ipv6.dns.nextdns.io/126ab2/nuc-deugniets-https6"]
+ #nameservers = ["https://dns.nextdns.io/126ab2/nuc-deugniets-https"]
+-nameservers = ["45.90.28.131", "45.90.30.131", "2a07:a8c0::12:6ab2", "2a07:a8c1::12:6ab2"]
++#nameservers = ["45.90.28.131", "45.90.30.131", "2a07:a8c0::12:6ab2", "2a07:a8c1::12:6ab2"]
+ 
+ # DNS Servers to forward to
+ #nameservers = ["1.1.1.1", "1.0.0.1", "8.8.8.8", "8.8.4.4", "9.9.9.10", "149.112.112.10"]
+@@ -126,5 +127,5 @@ optimize = false
+ #blacklist = ["/opt/accomplist/chris/regex.black", "/opt/accomplist/deugniets/plain.black.regex.list", "/opt/accomplist/deugniets/optimized.black.domain.list", "/opt/accomplist/deugniets/plain.black.ip4cidr.list", "/opt/accomplist/deugniets/plain.black.ip6cidr.list"]
+ 
+ whitelist = ["/opt/deugniets/forwarders.list", "/opt/deugniets/alias.list", "/opt/deugniets/unfilter.list", "/opt/deugniets/doh.alias.list", "/opt/accomplist/chris/connectivity-check.list", "/opt/accomplist/deugniets/deugniets.white.list", "/opt/accomplist/chris/white.special", "/opt/accomplist/chris/private-addresses.list"]
+-#blacklist = ["/opt/deugniets/black.list", "/opt/accomplist/deugniets/deugniets.black.list","/opt/accomplist/family-safe/deugniets.black.list", "/opt/accomplist/malicious-ip/deugniets.black.list"]
++blacklist = ["/opt/deugniets/black.list", "/opt/accomplist/deugniets/deugniets.black.list","/opt/accomplist/family-safe/deugniets.black.list", "/opt/accomplist/malicious-ip/deugniets.black.list"]
+ 
+diff --git a/deugniets.py b/deugniets.py
+index 2c42785..1536aa9 100644
+--- a/deugniets.py
++++ b/deugniets.py
+@@ -1,7 +1,7 @@
+ #!/usr/bin/env python3
+ '''
+ =======================================================================
+- deugniets.py v2.50-20191113 Copyright 2019 by cbuijs@chrisbuijs.com
++ deugniets.py v2.55-20191113 Copyright 2019 by cbuijs@chrisbuijs.com
+ =======================================================================
+ 
+  Based on: https://github.com/supriyo-biswas/adblock-dns-server
+@@ -1085,6 +1085,7 @@ def dnsl_check(dnsl, value, isip):
+     return False
+ 
+ 
++# !!! Absolet
+ def dns_request(qid, cachename, qname, rdtype, addrs):
+     result = None
+     rcode = dns.rcode.SERVFAIL
+@@ -1407,27 +1408,11 @@ def dns_query(name, rdclass, rdtype, qid, cip, unfilter, fttl):
+         result = False
+         response = None
+ 
+-        response, rcode = dox_request(qid, qname, rdtype, cachename, ip_family(cachename, addrs, cip), False)
+-
+         #rttstart = time.time()
+-
+-        ### !!! NEEDS WORK: Ineeficient ip_family when mixed
+-        #doxaddrs = list(filter(is_dox.search, addrs)) #+ list(filter(is_dox4.search, addrs)) + list(filter(is_dox6.search, addrs))
+-        #if doxaddrs:
+-        #    ### !!!! WORK IN PROGRESS: DoH
+-        #    response, rcode = dox_request(qid, qname, rdtype, cachename, ip_family(cachename, doxaddrs, cip), False)
+-        #else:
+-        #    if config['log_forwards']:
+-        #        logging.info('{0}-FORWARDER [{1}]: Forwarding \"{2}\" to \"{3}\" ({4})'.format(fwdtag, qid, cachename, ', '.join(addrs), match))
+-       # 
+-       #     result, rcode = dns_request(qid, cachename, qname, rdtype, addrs)
+-       #     if result:
+-       #         response = result.response
+-
++        response, rcode = dox_request(qid, qname, rdtype, cachename, ip_family(cachename, addrs, cip), False, cip)
+         #rttend = time.time()
+         #logging.info('RTT [{0}]: Resolving {1} took {2} msec'.format(qid, cachename, round((rttend - rttstart) * 1000)))
+ 
+-
+         if response:
+             #response = result.response
+             rcode = str(dns.rcode.to_text(response.rcode()))
+@@ -1629,9 +1614,25 @@ def dns_query(name, rdclass, rdtype, qid, cip, unfilter, fttl):
+ 
+ # !!!! WORK IN PROGRESS
+ # Code based and adapted on: https://www.bortzmeyer.org/hackathon-ietf-101.html
+-def dox_request(qid, qname, rdtype, cachename, urls, rfc8484):
++def dox_request(qid, qname, rdtype, cachename, urls, rfc8484, cip):
+     global requests_session
+ 
++    message = dns.message.make_query(encode_0x20(qname), rdtype)
++
++    # !!! Anonymize CIP
++    cso = False
++    if cip and is_ip.search(cip):
++        if cip.find(':') > 0:
++            bits = 64
++        else:
++            bits = 24
++
++        ocip = IP(cip).make_net(str(bits)).strNormal(0)
++
++        logging.info('CLIENT-SUBNET: {0} -> {1}/{2}'.format(cip, ocip, bits))
++        cso = clientsubnetoption.ClientSubnetOption(ocip, bits)
++        message.use_edns(options=[cso])
++
+     retries = 0
+     while retries < 3:
+         for url in filter(None, urls):
+@@ -1640,7 +1641,6 @@ def dox_request(qid, qname, rdtype, cachename, urls, rfc8484):
+ 
+                 # DOH
+                 if url.startswith('https://'):
+-                    message = dns.message.make_query(encode_0x20(qname), rdtype)
+                     message.id = 0 # DoH requests that
+                     rcode = 500
+ 
+@@ -1710,11 +1710,16 @@ def dox_request(qid, qname, rdtype, cachename, urls, rfc8484):
+                     addr, port = '{0}{1}'.format(addr, '@53').split('@')[0:2]
+                     if config['log_forwards']:
+                         logging.info('DNS-QUERY [#{0}]: Query for {1}/IN/{2} to {3}@{4}'.format(retries, qname, dns.rdatatype.to_text(rdtype), addr, port))
+-                    result, rcode = dns_request(qid, cachename, qname, rdtype, [addr])
+-                    if result and result.response:
+-                        return result.response, result.response.rcode()
+-                    elif rcode:
+-                        return None, rcode
++
++                    response = False
++                    try:
++                        response = dns.query.udp(message, addr, timeout=3, port=int(port))
++
++                    except BaseException as err:
++                        logging.error('DNS-QUERY-ERROR: Query for {0}/IN/{1} to {2} - {3}'.format(qname, dns.rdatatype.to_text(rdtype), url, err))
++
++                    if response:
++                        return response, response.rcode()
+ 
+     return None, dns.rcode.SERVFAIL
+ 

@@ -1,0 +1,390 @@
+diff --git a/deugniets.conf b/deugniets.conf
+index 0cdc4ed..bcd44f6 100644
+--- a/deugniets.conf
++++ b/deugniets.conf
+@@ -62,7 +62,7 @@ blacklist_cache_ttl = 86400
+ blacklist_ttl = 3600
+ rc_ttl = 120
+ rc_error_ttl = 30
+-min_ttl = 300
++min_ttl = 2400
+ max_ttl = 86400
+ spoof_ttl = 3600
+ 
+diff --git a/deugniets.py b/deugniets.py
+index eee9138..ec0479b 100644
+--- a/deugniets.py
++++ b/deugniets.py
+@@ -1,7 +1,7 @@
+ #!/usr/bin/env python3
+ '''
+ =======================================================================
+- deugniets.py v2.575-20191120 Copyright 2019 by cbuijs@chrisbuijs.com
++ deugniets.py v2.58-20191125 Copyright 2019 by cbuijs@chrisbuijs.com
+ =======================================================================
+ 
+  Based on: https://github.com/supriyo-biswas/adblock-dns-server
+@@ -15,7 +15,6 @@
+  - Fix listening/response IP when responding (same IP out as in), IPv6
+  - Fix TCP listeners
+  - Add multiple addresses/ports liste_on feature
+- - Add IPv6 transport/handling (AF_INET6)
+  - Ability to disable resolution of aliases/spoofs
+  - Filter out CNAME's with no resulting address(es)A
+  - Alias based on regex
+@@ -25,7 +24,7 @@
+ 
+ # System
+ import os, sys, time, gc
+-gc.enable()
++gc.enable() # Garbage collection
+ 
+ # Logging
+ import logging
+@@ -45,6 +44,7 @@ import threading
+ 
+ # Sockets and SSL
+ import socket
++from socket import _socket
+ import socketserver
+ import ssl
+ 
+@@ -176,6 +176,24 @@ is_dox6 = regex.compile("^(dn|http|tl)s://(do[ht]|ip(v)*)6\..*$", regex.I)
+ 
+ #####################################################################
+ 
++# Replace socket.getaddrinfo with caching version to speedup requests/urllib
++def _getaddrinfo(host, port=53, family=0, type=0, proto=0, flags=0):
++    cachename = '{0}/{1}'.format(host, port)
++    #logging.debug('GETADDRINFO: {0} {1} {2} {3} {4} {5}'.format(host, port, family, type, proto, flags))
++    result = cache.get(cachename)
++    tag = 'CACHE-HIT'
++    if result is None:
++        tag = 'CACHED'
++        result = _socket.getaddrinfo(host, port, family, type, proto, flags)
++        cache.add(obj=CachedObject(name=cachename, obj=result, ttl=2400)) # Cache 40 mins, see: https://blog.apnic.net/2019/11/12/stop-using-ridiculously-low-dns-ttls/
++
++    ips = list((map(lambda x: x[4][0], result)))
++    logging.info('GETADDRINFO-{0}: {1} -> {2}'.format(tag, host, ', '.join(ips)))
++    return result
++
++socket.getaddrinfo = _getaddrinfo
++
++#####################################################################
+ 
+ def setup_nameservers():
+     '''Setup NameServers to Forward to'''
+@@ -327,14 +345,6 @@ def agg_ip(iplist, listname, fam):
+         if ip not in iplist:
+             logging.info('AGGREGATE-{0}-[{1}]: Removed {2} due to summarization'.format(fam, listname, ip))
+            
+-    #lastip = 'None'
+-    #for ip in iplist:
+-    #    if iplist.get_key(ip) == ip and (not ip in new):
+-    #        new[ip] = iplist[ip]
+-    #        lastip = ip
+-    #    else:
+-    #        logging.info('AGGREGATE-{0}-[{1}]: Removed {2} due to parent {3}'.format(fam, listname, ip, lastip))
+-
+     beforecount = len(iplist)
+     aftercount = len(new)
+     logging.info('AGGREGATE-{0}-[{1}]: Went from {2} to {3} entries ({4})'.format(fam, listname, beforecount, aftercount, aftercount - beforecount))
+@@ -373,7 +383,8 @@ def read_list(filenames, listname, domlst, ip4lst, ip6lst, rxlst, unlst, unip4,
+             count = 0
+             for line in lines:
+                 count += 1
+-                entry = regex.split('\s*#\s*', line.replace('\r', '').replace('\n', ''))[0].strip().rstrip('!') # Strip comments and line-feeds
++                #entry = regex.split('\s*#\s*', line.replace('\r', '').replace('\n', ''))[0].strip().rstrip('!') # Strip comments and line-feeds
++                entry = regex.split('\s*#\s*', line)[0].strip().rstrip('!') # Strip comments and line-feeds
+                 if entry:
+                     if config['filter_response'] and is_ip4.search(entry):
+                         ip4lst[entry] = entry
+@@ -500,7 +511,7 @@ def get_lines(filename, listname):
+         try:
+             r = requests.get(filename, timeout=10, headers=headers, allow_redirects=True)
+             if r.status_code == 200:
+-                lines = uniq(r.text.splitlines(), filename)
++                lines = uniq(r.text.splitlines(0), filename)
+             else:
+                 logging.error('ERROR: Unable to download from \"{0}\" ({1})'.format(filename, r.status_code))
+ 
+@@ -511,7 +522,7 @@ def get_lines(filename, listname):
+         logging.debug('FETCH: Fetching \"{0}\" from file \"{1}\"'.format(listname, filename))
+         try:
+             f = open(filename, 'r')
+-            lines = uniq(f.read().splitlines(), filename)
++            lines = uniq(f.read().splitlines(0), filename)
+             f.close()
+ 
+         except BaseException as err:
+@@ -526,10 +537,6 @@ def get_lines(filename, listname):
+ 
+ def uniq(lst, lstname):
+     return list(filter(None, list(dict.fromkeys(lst, lstname))))
+-    #seen = set()
+-    #newlst = list([x for x in lst if x and x not in seen and not seen.add(x) and not x.startswith('#')])
+-    #logging.debug('UNIQ [{0}]: Number of lines went from {1} to {2} ({3})'.format(lstname, len(lst), len(newlst), len(newlst) - len(lst)))
+-    #return newlst
+ 
+ 
+ def file_exist(file, isdb):
+@@ -1129,6 +1136,8 @@ def dns_query(name, rdclass, rdtype, qid, cip, unfilter, fttl):
+     qrdtype = str(dns.rdatatype.to_text(rdtype))
+     cip = str(cip)
+ 
++    cachename = qname + '/IN/' + qrdtype
++
+     if is_ip4.search(cip) and (not cip in wl_ip4) and (cip in bl_ip4):
+         logging.warning('ACL-BLACKLIST-HIT [{0}]: Client {1} -> {2}'.format(qid, cip, bl_ip4.get_key(cip)))
+         return (dns.rcode.REFUSED, [], [], [])
+@@ -1138,10 +1147,12 @@ def dns_query(name, rdclass, rdtype, qid, cip, unfilter, fttl):
+         return (dns.rcode.REFUSED, [], [], [])
+ 
+     if qrdtype == 'ANY' and config['blockany']:
+-        logging.warning('BLOCK-ANY-HIT [{0}]: {1}'.format(qid, cachename, qrdtype))
++        logging.warning('BLOCK-ANY-HIT [{0}]: {1}'.format(qid, cachename))
+         return (dns.rcode.REFUSED, [], [], [])
+ 
+-    if qrdtype in ('AXFR', 'HINFO', 'IXFR', 'NONE', 'OPT'):
++    # Absolete, Experimental or not used
++    # https://www.iana.org/assignments/dns-parameters/dns-parameters.xhtml
++    if qrdtype in ('A6', 'AXFR', 'DLV', 'HINFO', 'IXFR', 'LOC', 'MAILA', 'MAILB', 'MB', 'MF', 'MG', 'MR', 'NONE', 'NULL', 'NXT', 'OPT', 'RP', 'SPF', 'WKS', 'X25'):
+         logging.warning('RRTYPE-NOTIMP-HIT [{0}]: {1} -> {2}'.format(qid, qname, qrdtype))
+         return (dns.rcode.NOTIMP, [], [], [])
+ 
+@@ -1153,8 +1164,6 @@ def dns_query(name, rdclass, rdtype, qid, cip, unfilter, fttl):
+         #return (dns.rcode.SERVFAIL, [], [], [])
+         return (dns.rcode.FORMERR, [], [], [])
+ 
+-    cachename = qname + '/IN/' + qrdtype
+-
+     if unfilter:
+         #cachename = cachename + '/UNFILTERED'
+         cachename = cachename + '/' + str(cip)
+@@ -1438,7 +1447,7 @@ def dns_query(name, rdclass, rdtype, qid, cip, unfilter, fttl):
+             #    return (dns.rcode.SERVFAIL, [], [], [])
+ 
+             seen = set()
+-            seen.add(str(qname))
++            seen.add(str(qname)) # To skip first qname entry as already checked
+ 
+             if response.answer and rcode == 'NOERROR':
+                 status = None
+@@ -1450,28 +1459,28 @@ def dns_query(name, rdclass, rdtype, qid, cip, unfilter, fttl):
+                     else:
+                         for rrset in response.answer:
+                             rdtype = dns.rdatatype.to_text(rrset.rdtype)
+-
+-                            if str(rrset.name) not in seen:
+-                                seen.add(str(rrset.name))
++                            rrname = str(rrset.name)
++                            if rrname not in seen:
++                                seen.add(rrname) # Unduplicate data/qname chain
+                                 #logging.debug('RESPONSE-CHAIN-NAME-CHECK [{0}]: {1}'.format(qid, rrset.name))
+-                                if is_formerr('CHAIN-NAME', rrset.name, rdtype):
++                                if is_formerr('CHAIN-NAME', rrname, rdtype):
+                                     status = True
+-                                    blacklistname = rrset.name
++                                    blacklistname = rrname
+                                     break
+                                 else:
+-                                    status = is_blacklisted(rrset.name, 'CHAIN-NAME', False)
++                                    status = is_blacklisted(rrname, 'CHAIN-NAME', False)
+                                     if status is not None:
+                                         if status is True: # Blacklisted
+                                            returnstatus = 'BLACKLISTED'
+-                                           blacklistname = rrset.name
++                                           blacklistname = rrname
+                                            break
+                                         else: # Whitelisted
+                                            returnstatus = 'WHITELISTED'
+                                            break
+ 
+                             if rdtype in ('A', 'AAAA', 'CNAME', 'MX', 'NS', 'PTR', 'SRV'):
+-                                for rr in rrset:
+-                                    target = False
++                                orgrrset = rrset
++                                for rr in orgrrset:
+                                     if hasattr(rr, 'target'):
+                                         target = str(rr.target)
+                                     elif hasattr(rr, 'address'):
+@@ -1488,16 +1497,21 @@ def dns_query(name, rdclass, rdtype, qid, cip, unfilter, fttl):
+                                             blacklistname = target
+                                             break
+                                         elif is_ip.search(target) and (target in config['redirect_ip']):
+-                                            logging.warning('REDIRECT-IP-HIT: {0} -> {1}'.format(rrset.name, target))
++                                            logging.warning('REDIRECT-IP-HIT: {0} -> {1}'.format(rrname, target))
+                                             returnstatus = 'WHITELISTED'
+                                             break
+                                         else:
+                                             status = is_blacklisted(target, 'DATA', True)
+                                             if status is not None:
+                                                 if status is True: # Blacklisted
+-                                                    returnstatus = 'BLACKLISTED'
+-                                                    blacklistname = target
+-                                                    break
++                                                    if config['removeip'] and rdtype in ('A', 'AAAA'): # Remove IP from answer instead of blocking whole
++                                                        status = None
++                                                        logging.warning('REMOVE-IP: {0}'.format(target))
++                                                        rrset.remove(rr)
++                                                    else:
++                                                        returnstatus = 'BLACKLISTED'
++                                                        blacklistname = target
++                                                        break
+                                                 else: # Whitelisted
+                                                     returnstatus = 'WHITELISTED'
+                                                     break
+@@ -1667,7 +1681,7 @@ def dox_request(qid, qname, rdtype, cachename, urls, rfc8484, cip):
+                         fullurl = '{0}?ct&dns={1}'.format(url, dns_req)
+ 
+                         try:
+-                            r = requests_session.get(fullurl, timeout=5, headers=headers, allow_redirects=False, proxies=None)
++                            r = requests_session.get(fullurl, timeout=5, headers=headers, allow_redirects=False, proxies=None, stream=True)
+                             if r:
+                                 rcode = r.status_code
+                         except BaseException as err:
+@@ -1680,7 +1694,7 @@ def dox_request(qid, qname, rdtype, cachename, urls, rfc8484, cip):
+                         headers = {'User-Agent': config['useragent'], 'Accept': 'application/dns-udpwireformat', 'Content-type': 'application/dns-udpwireformat'}
+ 
+                         try:
+-                            r = requests.post(url, data=message.to_wire(), timeout=5, headers=headers, allow_redirects=False, proxies=None)
++                            r = requests.post(url, data=message.to_wire(), timeout=5, headers=headers, allow_redirects=False, proxies=None, stream=True)
+                             if r:
+                                 rcode = r.status_code
+                         except BaseException as err:
+@@ -1689,6 +1703,7 @@ def dox_request(qid, qname, rdtype, cachename, urls, rfc8484, cip):
+                     if rcode == 500:
+                         logging.warning('DOH-INFO: Re-initiating session')
+                         requests_session.close()
++                        time.sleep(config['retry_wait'])
+                         requests_session = requests.Session()
+                         requests_session.mount('https://', HTTP20Adapter())
+ 
+@@ -1724,6 +1739,7 @@ def dox_request(qid, qname, rdtype, cachename, urls, rfc8484, cip):
+ 
+                            except BaseException as err:
+                                logging.error('DOT-QUERY-ERROR: Query for {0}/IN/{1} to {2} - {3}'.format(qname, dns.rdatatype.to_text(rdtype), url, err))
++                               time.sleep(config['retry_wait'])
+ 
+                            if response:
+                                return response, response.rcode()
+@@ -1742,6 +1758,7 @@ def dox_request(qid, qname, rdtype, cachename, urls, rfc8484, cip):
+ 
+                     except BaseException as err:
+                         logging.error('DNS-QUERY-ERROR: Query for {0}/IN/{1} to {2} - {3}'.format(qname, dns.rdatatype.to_text(rdtype), url, err))
++                        time.sleep(config['retry_wait'])
+ 
+                     if response:
+                         return response, response.rcode()
+@@ -1754,7 +1771,7 @@ def clear_caches():
+     listed_cache.clear()
+     unfilter_cache.clear()
+     queryhits.clear()
+-    gc.collect()
++    gc.collect() # Collect garbage
+     return True
+ 
+ 
+@@ -1940,16 +1957,9 @@ def handle_query(raw_data, client_ip):
+         logging.error('REQUEST-SERVFAIL [{0}]: Query \"{1}\" not 1 question ({2})!'.format(query.id, queryname, len(query.question)))
+         servfail = True
+ 
+-    #elif not is_dom.search(name):
+-    #    logging.error('REQUEST-SERVFAIL [{0}]: Query name \"{1}\" Invalid Syntax!'.format(query.id, queryname))
+-    #    servfail = True
+-
+     if servfail:
+         result = (dns.rcode.SERVFAIL, [], [], [])
+ 
+-    #elif name in listed_cache:
+-    #    result = (config['blacklist_rcode'], [], [], [])
+-
+     else:
+         #logging.debug('REQUEST-FLAGS-FROM-CLIENT [{0}]: {1}'.format(query.id, dns.flags.to_text(query.flags)))
+ 
+@@ -2052,24 +2062,28 @@ class ThreadedUDPServer4(socketserver.ThreadingMixIn, socketserver.UDPServer):
+     '''UDP Thread'''
+     allow_reuse_address = True
+     address_family = socket.AF_INET
++    socket_type = socket.SOCK_DGRAM
+ 
+ 
+ class ThreadedTCPServer4(socketserver.ThreadingMixIn, socketserver.TCPServer):
+     '''TCP Thread'''
+     allow_reuse_address = True
+     address_family = socket.AF_INET
++    socket_type = socket.SOCK_STREAM
+ 
+ 
+ class ThreadedUDPServer6(socketserver.ThreadingMixIn, socketserver.UDPServer):
+     '''UDP Thread'''
+     allow_reuse_address = True
+     address_family = socket.AF_INET6
++    socket_type = socket.SOCK_DGRAM
+ 
+ 
+ class ThreadedTCPServer6(socketserver.ThreadingMixIn, socketserver.TCPServer):
+     '''TCP Thread'''
+     allow_reuse_address = True
+     address_family = socket.AF_INET6
++    socket_type = socket.SOCK_STREAM
+ 
+ 
+ def run_server():
+@@ -2079,6 +2093,8 @@ def run_server():
+     ###    af = dns.inet.af_for_address(ipaddr)
+     ###    https://gitlab.labs.nic.cz/knot/respdiff/blob/master/respdiff/sendrecv.py#L198
+ 
++    ### TLS: https://stackoverflow.com/questions/46964122/how-to-create-a-tlslite-ng-server-with-tls-1-3-support-only
++
+     dnsport = int(config['port'])
+ 
+     logging.info('SERVER: DeugNietS Starting on port {0}'.format(dnsport))
+@@ -2100,9 +2116,10 @@ def run_server():
+     for dnsserver in config['nameservers']:
+         if dnsserver.startswith('tls://'):
+             hostname = dnsserver.split('/')[2]
+-            ips = list((map( lambda x: x[4][0], socket.getaddrinfo('{0}.'.format(hostname.rstrip('.')), 53, type=socket.SOCK_STREAM))))
++            ips = list((map(lambda x: x[4][0], socket.getaddrinfo('{0}.'.format(hostname.rstrip('.')), 53, type=socket.SOCK_STREAM))))
+             logging.info('TLS-RESOLUTION: {0} -> {1}'.format(hostname, ', '.join(ips)))
+             for ip in ips:
++                #logging.debug('TLS-SERVER: {0} added {1}'.format(hostname, ip))
+                 newentry = 'tls://{0}#{1}'.format(hostname, ip)
+                 newnameservers.append(newentry)
+ 
+@@ -2152,7 +2169,8 @@ if __name__ == '__main__':
+     config['blacklist_ttl'] = 3600
+     config['rc_ttl'] = 120
+     config['rc_error_ttl'] = 30
+-    config['min_ttl'] = 30
++    #config['min_ttl'] = 30
++    config['min_ttl'] = 2400 # https://blog.apnic.net/2019/11/12/stop-using-ridiculously-low-dns-ttls/
+     config['max_ttl'] = 86400
+     config['spoof_ttl'] = 3600
+ 
+@@ -2182,6 +2200,7 @@ if __name__ == '__main__':
+     config['ignoreip'] = False
+     config['blockweird'] = True
+     config['check_iprev'] = False
++    config['removeip'] = True
+ 
+     # 0x20 encoding
+     config['0x20'] = False
+@@ -2369,7 +2388,7 @@ if __name__ == '__main__':
+     # Setup nameservers
+     setup_nameservers()
+ 
+-    # Setup request sessions
++    # Setup requests sessions
+     requests_session = requests.Session()
+     requests_session.mount('https://', HTTP20Adapter())
+ 
+diff --git a/requirements.txt b/requirements.txt
+index 243f329..814331d 100644
+--- a/requirements.txt
++++ b/requirements.txt
+@@ -8,4 +8,3 @@ python-hosts>=0.4.7
+ pytricia>=1.0.0
+ regex>=2019.6.8
+ requests>=2.22.0
+-urllib3==1.24.3 # Latest version supported by requests

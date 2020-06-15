@@ -1,0 +1,42 @@
+diff --git a/deugniets.py b/deugniets.py
+index 45dff3f..2181312 100644
+--- a/deugniets.py
++++ b/deugniets.py
+@@ -1,7 +1,7 @@
+ #!/usr/bin/env python3
+ '''
+ ===========================================================================
+- deugniets.py v2.744-20200302 Copyright 2019-2020 by cbuijs@chrisbuijs.com
++ deugniets.py v2.745-20200302 Copyright 2019-2020 by cbuijs@chrisbuijs.com
+ ===========================================================================
+ 
+  Based on: https://github.com/supriyo-biswas/adblock-dns-server
+@@ -417,7 +417,7 @@ def read_list(filenames, listname, domlst, ip4lst, ip6lst, rxlst, unlst, unip4,
+             cleanlines = set()
+             for line in list(filter(None, lines)):
+                 cleanline = regex.split('\s*#\s*', line)[0].strip().rstrip('!') # Strip comments and line-feeds
+-                if cleanline:
++                if cleanline and cleanline not in cleanlines:
+                     cleanlines.add(cleanline)
+ 
+             logging.info('PROCESS-LIST ({0}): Processing {1} lines (out of {2}) ...'.format(lname, len(cleanlines), len(lines)))
+@@ -558,7 +558,8 @@ def get_lines(filename, listname):
+         try:
+             r = requests.get(filename, timeout=10, headers=headers, allow_redirects=True)
+             if r.status_code == 200:
+-                lines = uniq(r.text.splitlines(0), filename)
++                #lines = uniq(r.text.splitlines(0), filename)
++                lines = r.text.splitlines(0)
+             else:
+                 logging.error('ERROR: Unable to download from \"{0}\" ({1})'.format(filename, r.status_code))
+ 
+@@ -569,7 +570,8 @@ def get_lines(filename, listname):
+         logging.info('FETCH: Fetching \"{0}\" from file \"{1}\" ...'.format(listname, filename))
+         try:
+             f = io.open(filename, 'r')
+-            lines = uniq(f.read().splitlines(0), filename)
++            #lines = uniq(f.read().splitlines(0), filename)
++            lines = f.read().splitlines(0)
+             f.close()
+ 
+         except BaseException as err:

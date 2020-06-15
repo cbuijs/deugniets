@@ -1,0 +1,43 @@
+diff --git a/deugniets.py b/deugniets.py
+index 555e85e..aaae287 100644
+--- a/deugniets.py
++++ b/deugniets.py
+@@ -1,7 +1,7 @@
+ #!/usr/bin/env python3
+ '''
+ =======================================================================
+- deugniets.py v2.599-20191204 Copyright 2019 by cbuijs@chrisbuijs.com
++ deugniets.py v2.60-20191204 Copyright 2019 by cbuijs@chrisbuijs.com
+ =======================================================================
+ 
+  Based on: https://github.com/supriyo-biswas/adblock-dns-server
+@@ -123,6 +123,7 @@ command_acl6['0::1/128'] = True
+ dummy = '#!#!DUMMY!#!#'
+ abusecount = 0
+ maxabusecount = 1000
++abusecountday = time.strftime('%d')
+ 
+ # Domain Regex
+ is_dom = regex.compile('(?=^.{1,253}[a-z][\.]*$)(^((?!-)[a-z0-9_-]{0,62}[a-z0-9]\.)*(xn--[a-z0-9-]{1,59}|[a-z]{2,63})[\.]*$)', regex.I) # Includes underscore
+@@ -1016,6 +1017,7 @@ def check_ip(valuetype, testvalue, orgtestvalue, iplist, listname, rc):
+ def check_badip(cip):
+     global abusecount
+     global maxabusecount
++    global abusecountday
+ 
+     if is_ip.search(cip):
+         if cip.find(':') > 0:
+@@ -1045,7 +1047,12 @@ def check_badip(cip):
+             querystring = {'ipAddress': cip, 'maxAgeInDays': '90'}
+             headers = {'Accept': 'application/json', 'Key': config['abuseipdbkey']}
+ 
+-            if abusecount < 500:
++            day = time.strftime('%d')
++            if abusecountday != day:
++                abusecount = 0
++                abusecountday = day
++
++            if abusecount < maxabusecount:
+                 count = 0
+                 while count < 3:
+                     count += 1

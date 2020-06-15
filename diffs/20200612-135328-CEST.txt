@@ -1,0 +1,12 @@
+diff --git a/deugniets.py b/deugniets.py
+index 9058fb6..1a3a825 100644
+--- a/deugniets.py
++++ b/deugniets.py
+@@ -3031,7 +3031,6 @@ def handle_query(raw_data, client_ip):
+ 
+     response = make_our_response(query)
+     response.set_rcode(result[0]) or dns.rcode.SERVFAIL
+-
+     response.answer = result[1] or []
+     response.authority = result[2] or []
+     response.additional = result[3] or []

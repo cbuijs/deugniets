@@ -1,0 +1,73 @@
+diff --git a/deugniets.py b/deugniets.py
+index 1536aa9..67ce8a1 100644
+--- a/deugniets.py
++++ b/deugniets.py
+@@ -1,7 +1,7 @@
+ #!/usr/bin/env python3
+ '''
+ =======================================================================
+- deugniets.py v2.55-20191113 Copyright 2019 by cbuijs@chrisbuijs.com
++ deugniets.py v2.561-20191113 Copyright 2019 by cbuijs@chrisbuijs.com
+ =======================================================================
+ 
+  Based on: https://github.com/supriyo-biswas/adblock-dns-server
+@@ -169,9 +169,9 @@ is_unfilter = regex.compile('^\+.*$', regex.I)
+ 
+ # Is DoH or DoT
+ #is_dox = regex.compile("^(dns|https|tls)://(?!(do[ht]|ip(v)*)[46]\.).*$", regex.I)
+-is_dox = regex.compile("^(dns|https|tls)://.*$", regex.I)
+-is_dox4 = regex.compile("^(dns|https|tls)://(do[ht]|ip(v)*)4\..*$", regex.I)
+-is_dox6 = regex.compile("^(dns|https|tls)://(do[ht]|ip(v)*)6\..*$", regex.I)
++is_dox = regex.compile("^(dn|http|tl)s://.*$", regex.I)
++is_dox4 = regex.compile("^(dn|http|tl)s://(do[ht]|ip(v)*)4\..*$", regex.I)
++is_dox6 = regex.compile("^(dn|http|tl)s://(do[ht]|ip(v)*)6\..*$", regex.I)
+ 
+ #####################################################################
+ 
+@@ -478,7 +478,7 @@ def get_value(entry, sepp, filt, addvalue):
+     if elements:
+         param = elements[0].lower()
+         if param:
+-            values = ','.join(filter(filt, regex.split('\s*,\s*', ','.join(elements[1:]))))
++            values = ','.join(list(filter(filt, regex.split('\s*,\s*', ','.join(elements[1:])))))
+             if values:
+                 if addvalue:
+                     values = addvalue + ',' + values
+@@ -1390,7 +1390,7 @@ def dns_query(name, rdclass, rdtype, qid, cip, unfilter, fttl):
+             if cip in addrs:
+                 logging.error('FORWARD-LOOP [{0}]: \"{1}\" from {2} (forwarder for {3})'.format(qid, cachename, cip, matchf))
+                 return (dns.rcode.SERVFAIL, [], [], [])
+-            forwarder[matchf]= ', '.join(addrs) # Preserve roundrobin order
++            forwarder[matchf]= ','.join(addrs) # Preserve roundrobin order
+ 
+         if rv is None and addrs is False:
+             match = 'DEFAULT'
+@@ -1619,9 +1619,8 @@ def dox_request(qid, qname, rdtype, cachename, urls, rfc8484, cip):
+ 
+     message = dns.message.make_query(encode_0x20(qname), rdtype)
+ 
+-    # !!! Anonymize CIP
+     cso = False
+-    if cip and is_ip.search(cip):
++    if config['use_ecs_ip'] and cip and is_ip.search(cip):
+         if cip.find(':') > 0:
+             bits = 64
+         else:
+@@ -1629,7 +1628,7 @@ def dox_request(qid, qname, rdtype, cachename, urls, rfc8484, cip):
+ 
+         ocip = IP(cip).make_net(str(bits)).strNormal(0)
+ 
+-        logging.info('CLIENT-SUBNET: {0} -> {1}/{2}'.format(cip, ocip, bits))
++        logging.info('EDNS-CLIENT-SUBNET-PRIVACY: {0} -> {1}/{2}'.format(cip, ocip, bits))
+         cso = clientsubnetoption.ClientSubnetOption(ocip, bits)
+         message.use_edns(options=[cso])
+ 
+@@ -1641,7 +1640,7 @@ def dox_request(qid, qname, rdtype, cachename, urls, rfc8484, cip):
+ 
+                 # DOH
+                 if url.startswith('https://'):
+-                    message.id = 0 # DoH requests that
++                    message.id = 0 # DoH requests this
+                     rcode = 500
+ 
+                     if rfc8484: # Use GET

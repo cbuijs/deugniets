@@ -1,0 +1,62 @@
+diff --git a/deugniets.py b/deugniets.py
+index fb91e82..50b4482 100644
+--- a/deugniets.py
++++ b/deugniets.py
+@@ -1,7 +1,7 @@
+ #!/usr/bin/env python3
+ '''
+ ===========================================================================
+- deugniets.py v2.741-20200221 Copyright 2019-2020 by cbuijs@chrisbuijs.com
++ deugniets.py v2.742-20200301 Copyright 2019-2020 by cbuijs@chrisbuijs.com
+ ===========================================================================
+ 
+  Based on: https://github.com/supriyo-biswas/adblock-dns-server
+@@ -1841,9 +1841,10 @@ def dns_query(name, rdclass, rdtype, qid, cip, unfilter, fttl):
+                 soa = dns.rrset.from_text(qname, ttl, 'IN', 6, "{0}.{1} {2}.{1} 1 60 60 60 60".format(dns.rcode.to_text(rcode).lower(), qname, qrdtype.lower()))
+                 rv = (rcode, [], [soa], [])
+ 
+-            else: # All TTLs same
+-                rv = update_ttls(rv, ttl)
++            # All TTLs same
++            rv = update_ttls(rv, ttl)
+ 
++            # Cache
+             cache.add(obj=CachedObject(name=cachename, obj=rv + (returnstatus,), ttl=ttl))
+ 
+     else:
+@@ -1853,12 +1854,14 @@ def dns_query(name, rdclass, rdtype, qid, cip, unfilter, fttl):
+ 
+ 
+ def update_ttls(result, left):
++    ttl = max(0, left)
++
+     for rrset in result[1]:
+-        rrset.ttl = left
++        rrset.ttl = ttl
+     for rrset in result[2]:
+-        rrset.ttl = left
++        rrset.ttl = ttl
+     for rrset in result[3]:
+-        rrset.ttl = left
++        rrset.ttl = ttl
+ 
+     return result
+ 
+@@ -2068,7 +2071,16 @@ def normttl(qname, answer, qid, newttl):
+         ttl = newttl
+         logging.info('TTL-OVERRIDE-FORCE [{0}]: Forced {1} for {2}'.format(qid, ttl, qname))
+     elif answer:
+-        ttl = answer[-1].ttl
++        #ttl = answer[-1].ttl
++        lttl = list()
++        for x in answer:
++            #lttl.append(max(config['min_ttl'], x.ttl))
++            lttl.append(max(0, x.ttl))
++
++        ttl = int(round(sum(lttl) / len(lttl)))
++
++        #logging.debug('TTL-AVERAGE [{0}]: {1} = {2}'.format(qid, qname, ttl))
++
+         match = check_dom('NAME', qname, forcettl, 'TTL', False, False)
+         if match:
+             logging.info('TTL-OVERRIDE-FORCE [{0}]: Forced from {1} to {2} for {3} ({4})'.format(qid, ttl, forcettl[match], qname, match))

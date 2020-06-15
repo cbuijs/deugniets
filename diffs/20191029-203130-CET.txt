@@ -1,0 +1,114 @@
+diff --git a/Dockerfile b/Dockerfile
+index 86341ff..7eacc9e 100644
+--- a/Dockerfile
++++ b/Dockerfile
+@@ -13,7 +13,7 @@ ADD requirements.txt /opt/deugniets/requirements.txt
+ ADD deugniets.conf.docker /opt/deugniets/deugniets.conf
+ ADD local.list.docker /opt/deugniets/local.list
+ RUN pip3 install --upgrade pip
+-RUN pip3 install git+https://github.com/rthalley/dnspython@master
+-RUN pip3 install -r /opt/deugniets/requirements.txt
++RUN pip3 install --upgrade git+https://github.com/rthalley/dnspython@master
++RUN pip3 install --upgrade -r /opt/deugniets/requirements.txt
+ CMD [ "python3", "/opt/deugniets/deugniets.py", "/opt/deugniets/deugniets.conf" ]
+ 
+diff --git a/deugniets.conf b/deugniets.conf
+index d1247e4..f4169c0 100644
+--- a/deugniets.conf
++++ b/deugniets.conf
+@@ -14,15 +14,18 @@ port = 53001
+ #nameservers = ["https://cloudflare-dns.com/dns-query", "https://dns10.quad9.net/dns-query", "https://dns.google/dns-query"]
+ #nameservers = ["https://cloudflare-dns.com/dns-query"]
+ #nameservers = ["https://cloudflare-dns.com/dns-query", "dns://1.1.1.1", "dns://1.0.0.1"]
+-#nameservers = ["https://dns.google/dns-query"]
++nameservers = ["https://dns.google/dns-query"]
+ 
+ #nameservers = ["https://dns.quad9.net/dns-query"]
+ #bootstrap = ["9.9.9.9", "149.112.112.112", "2620:fe::9", "2620:fe::fe"]
+ 
++#nameservers = ["https://doh.opendns.com/dns-query"]
++
++#nameservers = ["https://doh.powerdns.org/"]
++
+ #nameservers = ["https://dns.quad9.net/dns-query"]
+ #nameservers = ["https://doh.powerdns.org"]
+ #nameservers = ["https://dns.nextdns.io/65fef9/https-nuc"]
+-#nameservers = ["45.90.28.131", "45.90.30.131", "2a07:a8c0::12:6ab2", "2a07:a8c1::12:6ab2"]
+ #nameservers = ["127.0.0.1", "::1"]
+ 
+ #nameservers = ["https://dns.nextdns.io/126ab2/nuc-deugniets-https"]
+@@ -38,7 +41,7 @@ port = 53001
+ # DNSFilter
+ #nameservers = ["103.247.36.36", "103.247.37.37"]
+ # XS4ALL
+-nameservers = ["194.109.6.66", "194.109.9.99", "194.109.104.104", "2001:888:0:6::66", "2001:888:0:9::99"]
++#nameservers = ["194.109.6.66", "194.109.9.99", "194.109.104.104", "2001:888:0:6::66", "2001:888:0:9::99"]
+ #nameservers = ["tls://resolver.xs4all.nl"]
+ # Cleanbrowsing AdultFilter
+ #nameservers = ["185.228.168.10", "185.228.169.11", "2a0d:2a00:1::1", "2a0d:2a00:2::1"]
+diff --git a/deugniets.py b/deugniets.py
+index b35330d..d106142 100644
+--- a/deugniets.py
++++ b/deugniets.py
+@@ -1,7 +1,7 @@
+ #!/usr/bin/env python3
+ '''
+ =======================================================================
+- deugniets.py v2.397-20191029 Copyright 2019 by cbuijs@chrisbuijs.com
++ deugniets.py v2.398-20191029 Copyright 2019 by cbuijs@chrisbuijs.com
+ =======================================================================
+ 
+  Based on: https://github.com/supriyo-biswas/adblock-dns-server
+@@ -1917,7 +1917,6 @@ def handle_query(raw_data, client_ip):
+ 
+             else:
+                 match = check_dom('NAME', name, ul_dom, 'UNFILTER', False, False)
+-
+                 if match:
+                     unfilter = True
+                     unfilter_cache.add(obj=CachedObject(name=name, obj=True, ttl=config['unfilter_ttl']))
+@@ -2093,7 +2092,7 @@ if __name__ == '__main__':
+     config['use_ecs_ip'] = True
+ 
+     # Random RoundRobin
+-    config['roundrobin'] = False
++    config['roundrobin'] = True
+     config['randomroundrobin'] = False
+ 
+     # CNAME Collapse
+@@ -2272,6 +2271,9 @@ if __name__ == '__main__':
+             ul_ip4 = unip(ul_ip4, ul_ip4, False, 'IPV4-UNFILTER-UNFILTER', True)
+             ul_ip6 = unip(ul_ip6, ul_ip6, True, 'IPV6-UNFILTER-UNFILTER', True)
+ 
++            wl_dom = undom(wl_dom, ul_dom, 'WHITELIST-UNFILTER', True)
++            bl_dom = undom(bl_dom, ul_dom, 'BLACKLIST-UNFILTER', True)
++
+             wl_dom = unreg(wl_dom, wl_big_rx, 'WHITELIST-WHITELIST')
+             bl_dom = unreg(bl_dom, bl_big_rx, 'BLACKLIST-BLACKLIST')
+             bl_dom = unreg(bl_dom, wl_big_rx, 'BLACKLIST-WHITELIST')
+diff --git a/doh.alias.list b/doh.alias.list
+index e0434fc..a34febe 100644
+--- a/doh.alias.list
++++ b/doh.alias.list
+@@ -6,6 +6,7 @@ use-application-dns.net = NXDOMAIN
+ # https://github.com/bambenek/block-doh
+ # https://en.wikipedia.org/wiki/Public_recursive_name_server
+ # https://dnsprivacy.org/wiki/display/DP/DNS+Privacy+Test+Servers
++# https://dnscrypt.info/public-servers
+ # IP Addresses used are the local DNS server (e.g deugniets)
+ cloudflare-dns.com = 192.168.1.32, 2001:981:1759:1::32
+ dns.adguard.com = 192.168.1.32, 2001:981:1759:1::32
+diff --git a/requirements.txt b/requirements.txt
+index 0937d8e..b1e7933 100644
+--- a/requirements.txt
++++ b/requirements.txt
+@@ -1,3 +1,4 @@
++chardet==3.0.4 # Latest version supported by requests
+ clientsubnetoption>=2.1.1
+ dnspython>=2.0.0
+ hyper>=0.7.0
+@@ -6,3 +7,4 @@ IPy>=1.0
+ pytricia>=1.0.0
+ regex>=2019.6.8
+ requests>=2.22.0
++urllib3==1.24.3 # Latest version supported by requests

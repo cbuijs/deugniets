@@ -1,0 +1,336 @@
+diff --git a/deugniets.py b/deugniets.py
+index 3edd0eb..cec687a 100644
+--- a/deugniets.py
++++ b/deugniets.py
+@@ -1,7 +1,7 @@
+ #!/usr/bin/env python3
+ '''
+ ===========================================================================
+- deugniets.py v2.667-20200105 Copyright 2019-2020 by cbuijs@chrisbuijs.com
++ deugniets.py v2.72-20200219 Copyright 2019-2020 by cbuijs@chrisbuijs.com
+ ===========================================================================
+ 
+  Based on: https://github.com/supriyo-biswas/adblock-dns-server
+@@ -412,7 +412,9 @@ def read_list(filenames, listname, domlst, ip4lst, ip6lst, rxlst, unlst, unip4,
+         lines = get_lines(filename, listname)
+ 
+         if lines:
+-            #logging.info('PROCESS-LIST ({0}): Start processing ...'.format(lname))
++            logging.info('PROCESS-LIST ({0}): Processing {1} lines ...'.format(lname, len(lines)))
++
++            oldtotal = len(domlst) + len(ip4lst) + len(ip6lst) + len(rxlst) + len(unlst) + len(unip4) + len(unip6) + len(geolst) + len(alias) + len(forwarder) + len(forcettl)
+             count = 0
+             for line in lines:
+                 count += 1
+@@ -516,8 +518,10 @@ def read_list(filenames, listname, domlst, ip4lst, ip6lst, rxlst, unlst, unip4,
+                     else:
+                         logging.debug('LIST ({0}) [#{1}]: Unused: \"{2}\" - \"{3}\" (Check Filter Settings)'.format(lname, count, line, entry))
+ 
++            newtotal = len(domlst) + len(ip4lst) + len(ip6lst) + len(rxlst) + len(unlst) + len(unip4) + len(unip6) + len(geolst) + len(alias) + len(forwarder) + len(forcettl)
++            total = newtotal - oldtotal
+ 
+-            logging.info('PROCESS-LIST ({0}): Finished processing ...'.format(lname))
++            logging.info('PROCESS-LIST ({0}): Added {1} new entries (Skipped {2} comments/empty/invalid)...'.format(lname, total, len(lines) - total))
+ 
+     return domlst, ip4lst, ip6lst, rxlst, unlst, unip4, unip6, geolst
+ 
+@@ -538,7 +542,7 @@ def get_value(entry, sepp, filt, addvalue):
+ 
+ def get_lines(filename, listname):
+     '''Get all lines from file or URL'''
+-    logging.debug('GET-LINES: {0} - {1}'.format(filename, listname))
++    #logging.debug('GET-LINES: {0} - {1}'.format(filename, listname))
+     lines = False
+ 
+     if filename.startswith('http://') or filename.startswith('https://'):
+@@ -566,8 +570,8 @@ def get_lines(filename, listname):
+             logging.error('ERROR: Unable to open/read/process file \"{0}\" - {1}'.format(filename, err))
+             return False
+ 
+-    if lines:
+-        logging.info('GET-LINES [{0}]: Fetched {1} lines from {2}'.format(listname, len(lines), filename))
++    #if lines:
++    #    logging.info('GET-LINES [{0}]: Fetched {1} lines from {2}'.format(listname, len(lines), filename))
+ 
+     return lines
+ 
+@@ -845,13 +849,13 @@ def check_if_blacklisted(testvalue, valuetype, checkip):
+     if checkip is False and is_dom.search(testvalue):
+         #logging.debug('CHECK-{0}: \"{1}\" is a DOMAIN'.format(valuetype, testvalue))
+         if check_dom(valuetype, testvalue, wl_dom, 'WHITELIST', False, False): # Whitelisted
+-            if config['smartdoms'] and (check_dom(valuetype, testvalue, bl_dom, 'BLACKLIST', False, True) or check_rx(valuetype, testvalue, bl_rx, 'BLACKLIST')): # Blacklisted
++            if config['smartdoms'] and (check_dom(valuetype, testvalue, bl_dom, 'BLACKLIST', False, True) or check_rx(valuetype, testvalue, bl_rx, bl_big_rx, 'BLACKLIST')): # Blacklisted
+                 return True
+ 
+             return False
+     
+ 
+-        if check_rx(valuetype, orgtestvalue, wl_rx, 'WHITELIST'):
++        if check_rx(valuetype, orgtestvalue, wl_rx, wl_big_rx, 'WHITELIST'):
+             return False
+ 
+         #if config['check_ratio']:
+@@ -867,7 +871,7 @@ def check_if_blacklisted(testvalue, valuetype, checkip):
+         if check_dom(valuetype, testvalue, bl_dom, 'BLACKLIST', False, config['smartdoms']): # Blacklisted
+             return True
+ 
+-        if check_rx(valuetype, orgtestvalue, bl_rx, 'BLACKLIST'):
++        if check_rx(valuetype, orgtestvalue, bl_rx, bl_big_rx, 'BLACKLIST'):
+             return True
+ 
+         #if config['check_ratio']:
+@@ -972,16 +976,24 @@ def check_if_blacklisted(testvalue, valuetype, checkip):
+     return None
+ 
+ 
+-def check_rx(valuetype, testvalue, rxlst, tag):
++def check_rx(valuetype, testvalue, rxlst, rxbiglst, tag):
+     '''Match value against regex'''
+     if config['use_regex']:
+-        for rx in rxlst:
+-            match = rxlst[rx].search(testvalue.rstrip('.'))
++        if config['use_quick_regex']:
++            match = rxbiglst.search(testvalue)
+             if match:
+                 if config['log_hits']:
+-                    logging.warning('{0}-{1}-RX-HIT: \"{2}\" matches \"{3}\"'.format(valuetype, tag, testvalue, rx))
++                    logging.warning('{0}-{1}-QUICK-RX-HIT: \"{2}\" matches \"{3}\"'.format(valuetype, tag, testvalue, match.group()))
+                 return True
+ 
++        else:
++            for rx in rxlst:
++                match = rxlst[rx].search(testvalue.rstrip('.'))
++                if match:
++                    if config['log_hits']:
++                        logging.warning('{0}-{1}-RX-HIT: \"{2}\" matches \"{3}\"'.format(valuetype, tag, testvalue, rx))
++                    return True
++
+     return False
+ 
+ 
+@@ -1348,6 +1360,9 @@ def dns_query(name, rdclass, rdtype, qid, cip, unfilter, fttl):
+ 
+     cachename = '{0}/IN/{1}'.format(qname, qrdtype)
+ 
++    if cip not in private4 and cip not in private6:
++        cachename = '{0}/PUBLIC'.format(cachename)
++
+     if check_badip(cip):
+         return (dns.rcode.REFUSED, [], [], [])
+ 
+@@ -1515,7 +1530,7 @@ def dns_query(name, rdclass, rdtype, qid, cip, unfilter, fttl):
+             #rv = (dns.rcode.NOERROR, [], [], []) # Workaround for searchdomains
+             rv = (config['blacklist_rcode'], [], [], [])
+ 
+-        if rv is None and qrdtype in ('A', 'AAAA', 'CNAME'):
++        if rv is None and qrdtype in ('A', 'AAAA', 'CNAME') and (cip in private4 or cip in private6):
+             match = check_dom('NAME', qname, alias, 'ALIAS', False, False)
+             if match:
+                 spoof = alias[match]
+@@ -1842,6 +1857,14 @@ def dns_query(name, rdclass, rdtype, qid, cip, unfilter, fttl):
+                 soa = dns.rrset.from_text(qname, ttl, 'IN', 6, "{0}.{1} {2}.{1} 1 60 60 60 60".format(dns.rcode.to_text(rcode).lower(), qname, qrdtype.lower()))
+                 rv = (rcode, [], [soa], [])
+ 
++            else: # All TTLs same
++                for rrset in rv[1]:
++                    rrset.ttl = ttl
++                for rrset in rv[2]:
++                    rrset.ttl = ttl
++                for rrset in rv[3]:
++                    rrset.ttl = ttl
++
+             cache.add(obj=CachedObject(name=cachename, obj=rv + (returnstatus,), ttl=ttl))
+ 
+     else:
+@@ -1870,7 +1893,9 @@ def dox_request(qid, qname, rdtype, cachename, urls, rfc8484, cip):
+ 
+         ocip = IP(cip).make_net(str(bits)).strNormal(0)
+ 
+-        logging.info('EDNS-CLIENT-SUBNET-PRIVACY: {0} -> {1}/{2}'.format(cip, ocip, bits))
++        if bits not in (32, 128):
++            logging.info('EDNS-CLIENT-SUBNET-PRIVACY: {0} -> {1}/{2}'.format(cip, ocip, bits))
++
+         cso = clientsubnetoption.ClientSubnetOption(ocip, bits)
+         message.use_edns(edns=0, ednsflags=0, payload=1220, request_payload=None, options=[cso])
+     else:
+@@ -1888,10 +1913,7 @@ def dox_request(qid, qname, rdtype, cachename, urls, rfc8484, cip):
+                 # https://github.com/rthalley/dnspython/issues/358
+                 # !!! TO-DO: Use ourselfs to resolve hostname in URL (bootstrap), or stick in hosts-file
+                 if url.startswith('https://'):
+-                    if config['log_forwards']:
+-                        logging.info('DOH-QUERY [#{0}]: Query for {1}/IN/{2} to {3}'.format(retries, qname, dns.rdatatype.to_text(rdtype), url))
+-
+-                    if config['nextdns_id']:
++                    if config['nextdns'] and config['nextdns_id']:
+                         url += '/{0}-{1}'.format(regex.sub('\s+', '%20', config['nextdns_id']), regex.sub('[\.\:]+', '-', cip))
+ 
+                     response = False
+@@ -1901,6 +1923,10 @@ def dox_request(qid, qname, rdtype, cachename, urls, rfc8484, cip):
+                     except BaseException as err:
+                         logging.error('DOH-ERROR: Query for {0}/IN/{1} to {2} - {3}'.format(qname, dns.rdatatype.to_text(rdtype), url, err))
+ 
++                    if config['log_forwards']:
++                        ips = list((map(lambda x: x[4][0], cache.get('{0}/443/GETADDRINFO'.format(url.split('/')[2]))))) or '-'
++                        logging.info('DOH-QUERY [#{0}]: Query for {1}/IN/{2} to {3} ({4})'.format(retries, qname, dns.rdatatype.to_text(rdtype), url, ', '.join(ips)))
++
+                     if response:
+                         return response, response.rcode()
+ 
+@@ -2059,7 +2085,8 @@ def normttl(qname, answer, qid, newttl):
+             ttl = forcettl[match]
+         elif ttl < config['min_ttl']:
+             logging.info('TTL-OVERRIDE-MIN [{0}]: Forced from {1} to {2} for {3}'.format(qid, ttl, ttl + config['min_ttl'], qname))
+-            ttl += config['min_ttl']
++            #ttl += config['min_ttl']
++            ttl = config['min_ttl']
+         elif ttl > config['max_ttl']:
+             logging.info('TTL-OVERRIDE-MAX [{0}]: Forced from {1} to {2} for {3}'.format(qid, ttl, config['max_ttl'], qname))
+             ttl = config['max_ttl']
+@@ -2181,7 +2208,8 @@ def handle_query(raw_data, client_ip):
+         for opt in query.options:
+             if hasattr(opt, 'ip') and hasattr(opt, 'mask'):
+                 if config['log_requests']:
+-                    logging.info('EDNS-CLIENT-SUBNET [{0}]: Client {1} provides {2}'.format(query.id, client_ip, '{0}/{1}'.format(IP(opt.ip).strNormal(0), opt.mask)))
++                    ipmask = IP('{0}/{1}'.format(opt.ip, opt.mask)).strNormal(1)
++                    logging.info('EDNS-CLIENT-SUBNET [{0}]: Client {1} provides {2} ({3})'.format(query.id, client_ip, ipmask, geo(ipmask)))
+ 
+                 if opt.mask in (None, 0, 32, 128):
+                     client_ip = IP('{0}/{1}'.format(opt.ip, opt.mask)).strNormal(0)
+@@ -2615,6 +2643,7 @@ if __name__ == '__main__':
+     config['filter_request'] = True
+     config['filter_response'] = True
+     config['use_regex'] = True
++    config['use_quick_regex'] = True
+ 
+     # Smart domains (walk domains)
+     config['smartdoms'] = True
+@@ -2719,9 +2748,11 @@ if __name__ == '__main__':
+ 
+         for addr in config['private_addrs']:
+             if addr.find(':') > 0:
+-                private6[addr] = 'Private'
++                if addr not in private6:
++                    private6[addr] = 'Private'
+             else:
+-                private4[addr] = 'Private'
++                if addr not in private4:
++                    private4[addr] = 'Private'
+ 
+         for ip in private4:
+             logging.info('PRIVATE-IPV4: {0}'.format(ip)) # Debug
+diff --git a/doh.alias.list b/doh.alias.list
+index 6ae8b31..8ab4b28 100644
+--- a/doh.alias.list
++++ b/doh.alias.list
+@@ -1,5 +1,6 @@
+ # Disable Mozilla/Firefox usage of DoH - https://isc.sans.edu/diary/Blocking+Firefox+DoH+with+Bind/25316
+ googlezip.net = NXDOMAIN
++google-zip.net = NXDOMAIN
+ use-application-dns.net = NXDOMAIN
+ 
+ # https://github.com/curl/curl/wiki/DNS-over-HTTPS
+@@ -8,50 +9,61 @@ use-application-dns.net = NXDOMAIN
+ # https://dnsprivacy.org/wiki/display/DP/DNS+Privacy+Test+Servers
+ # https://dnscrypt.info/public-servers
+ # IP Addresses used are the local DNS server (e.g deugniets)
++
++1dot1dot1dot1.cloudflare-dns.com = 192.168.1.32, 2001:981:1759:1::32
++8888.google = 192.168.1.32, 2001:981:1759:1::32
++adult-filter-dns.cleanbrowsing.org = 192.168.1.32, 2001:981:1759:1::32
+ cloudflare-dns.com = 192.168.1.32, 2001:981:1759:1::32
++commons.host = 192.168.1.32, 2001:981:1759:1::32
++dns.quad9.net = 192.168.1.32, 2001:981:1759:1::32
++dns10.quad9.net = 192.168.1.32, 2001:981:1759:1::32
++dns11.quad9.net = 192.168.1.32, 2001:981:1759:1::32
++dns9.quad9.net = 192.168.1.32, 2001:981:1759:1::32
++dns.aaflalo.me = 192.168.1.32, 2001:981:1759:1::32
+ dns.adguard.com = 192.168.1.32, 2001:981:1759:1::32
++dns.cmrg.net = 192.168.1.32, 2001:981:1759:1::32
++dns.digitale-gesellschaft.ch = 192.168.1.32, 2001:981:1759:1::32
++dns.dns-over-https.com = 192.168.1.32, 2001:981:1759:1::32
++dns.dnsoverhttps.net = 192.168.1.32, 2001:981:1759:1::32
+ dns-family.adguard.com = 192.168.1.32, 2001:981:1759:1::32
+-dns.aaflalo.me = 192.168.1.32, 2001:981:1759:1::32
+ dns-gcp.aaflalo.me = 192.168.1.32, 2001:981:1759:1::32
++dns.google = 192.168.1.32, 2001:981:1759:1::32
++dns.google.com = 192.168.1.32, 2001:981:1759:1::32
++dns.neutopia.org = 192.168.1.32, 2001:981:1759:1::32
++#dns.nextdns.io = 192.168.1.32, 2001:981:1759:1::32
+ dns-nyc.aaflalo.me = 192.168.1.32, 2001:981:1759:1::32
+-doh.armadilodns.net = 192.168.1.32, 2001:981:1759:1::32
++dns.rubyfish.cn = 192.168.1.32, 2001:981:1759:1::32
++doh1.dnswarden.com = 192.168.1.32, 2001:981:1759:1::32
++doh2.dnswarden.com = 192.168.1.32, 2001:981:1759:1::32
+ doh.appliedprivacy.net = 192.168.1.32, 2001:981:1759:1::32
++doh.armadilodns.net = 192.168.1.32, 2001:981:1759:1::32
+ doh.blahdns.com = 192.168.1.32, 2001:981:1759:1::32
+-doh-ch.blahdns.com = 192.168.1.32, 2001:981:1759:1::32
+-doh-de.blahdns.com = 192.168.1.32, 2001:981:1759:1::32
+-doh-jp.blahdns.com = 192.168.1.32, 2001:981:1759:1::32
+ doh.captnemo.in = 192.168.1.32, 2001:981:1759:1::32
++doh-ch.blahdns.com = 192.168.1.32, 2001:981:1759:1::32
+ doh.cleanbrowsing.org = 192.168.1.32, 2001:981:1759:1::32
+-dns.cmrg.net = 192.168.1.32, 2001:981:1759:1::32
+-commons.host = 192.168.1.32, 2001:981:1759:1::32
+ doh.crypto.sx = 192.168.1.32, 2001:981:1759:1::32
+-dns.digitale-gesellschaft.ch = 192.168.1.32, 2001:981:1759:1::32
++doh-de.blahdns.com = 192.168.1.32, 2001:981:1759:1::32
+ doh.dns.sb = 192.168.1.32, 2001:981:1759:1::32
+-dns.dnsoverhttps.net = 192.168.1.32, 2001:981:1759:1::32
+-dns.dns-over-https.com = 192.168.1.32, 2001:981:1759:1::32
++doh.dns.sb.cdn.cloudflare.net = 192.168.1.32, 2001:981:1759:1::32
+ doh.dnswarden.com = 192.168.1.32, 2001:981:1759:1::32
+-doh1.dnswarden.com = 192.168.1.32, 2001:981:1759:1::32
+-doh2.dnswarden.com = 192.168.1.32, 2001:981:1759:1::32
+-8888.google = 192.168.1.32, 2001:981:1759:1::32
+-dns.google = 192.168.1.32, 2001:981:1759:1::32
+-dns.google.com = 192.168.1.32, 2001:981:1759:1::32
+-google-public-dns-a.google.com = 192.168.1.32, 2001:981:1759:1::32
+-google-public-dns-b.google.com = 192.168.1.32, 2001:981:1759:1::32
++doh-jp.blahdns.com = 192.168.1.32, 2001:981:1759:1::32
+ doh.li = 192.168.1.32, 2001:981:1759:1::32
+ doh.libredns.gr = 192.168.1.32, 2001:981:1759:1::32
+-dot.libredns.gr = 192.168.1.32, 2001:981:1759:1::32
+ doh.netweaver.uk = 192.168.1.32, 2001:981:1759:1::32
+-dns.neutopia.org = 192.168.1.32, 2001:981:1759:1::32
+-#dns.nextdns.io = 192.168.1.32, 2001:981:1759:1::32
+-odvr.nic.cz = 192.168.1.32, 2001:981:1759:1::32
+-one.one.one.one = 192.168.1.32, 2001:981:1759:1::32
+ doh.powerdns.org = 192.168.1.32, 2001:981:1759:1::32
+-dns.quad9.net = 192.168.1.32, 2001:981:1759:1::32
+-dns9.quad9.net = 192.168.1.32, 2001:981:1759:1::32
+-dns10.quad9.net = 192.168.1.32, 2001:981:1759:1::32
+-rpz-public-resolver1.rrdns.pch.net = 192.168.1.32, 2001:981:1759:1::32
+-rpz-public-resolver2.rrdns.pch.net = 192.168.1.32, 2001:981:1759:1::32
+-dns.rubyfish.cn = 192.168.1.32, 2001:981:1759:1::32
+ doh.securedns.eu = 192.168.1.32, 2001:981:1759:1::32
+ doh.tiar.app = 192.168.1.32, 2001:981:1759:1::32
++dot.libredns.gr = 192.168.1.32, 2001:981:1759:1::32
++dot.xfinity.com = 192.168.1.32, 2001:981:1759:1::32
++family-filter-dns.cleanbrowsing.org = 192.168.1.32, 2001:981:1759:1::32
++google-public-dns-a.google.com = 192.168.1.32, 2001:981:1759:1::32
++google-public-dns-b.google.com = 192.168.1.32, 2001:981:1759:1::32
+ jp.tiar.app = 192.168.1.32, 2001:981:1759:1::32
++libredns.gr = 192.168.1.32, 2001:981:1759:1::32
++odvr.nic.cz = 192.168.1.32, 2001:981:1759:1::32
++one.one.one.one = 192.168.1.32, 2001:981:1759:1::32
++rpz-public-resolver1.rrdns.pch.net = 192.168.1.32, 2001:981:1759:1::32
++rpz-public-resolver2.rrdns.pch.net = 192.168.1.32, 2001:981:1759:1::32
++security-filter-dns.cleanbrowsing.org = 192.168.1.32, 2001:981:1759:1::32
++static.captnemo.in = 192.168.1.32, 2001:981:1759:1::32
++
+diff --git a/geo-update.sh b/geo-update.sh
+index 85c7a75..ce2ebc5 100755
+--- a/geo-update.sh
++++ b/geo-update.sh
+@@ -2,6 +2,10 @@
+ 
+ cd /opt/deugniets
+ 
++/usr/bin/geoipupdate -v
++
++exit 0
++
+ #wget -4 "https://geolite.maxmind.com/download/geoip/database/GeoLite2-City.tar.gz" -O GeoLite2-City.tar.gz
+ wget -4 "https://download.maxmind.com/app/geoip_download_by_token?edition_id=GeoLite2-City&token=v2.local.jURBhaN7zF26t-r1i0aGUoM4loXqLHr2wileNa9uUjNckshoE5hY-pqjBEYMOkcCjpvalxOiYVO499NSymI_ULPnv4T_vS-jB0-J1hxG5vu21TPnrCFhA6V-Jm4kfq1Vkn14qPfc6R_hF2LedeybUe2YXUiYzQtTXjyhzOddF7aQVnyVYsjgO46EGhCCzdz8zGWmY4io&suffix=tar.gz" -O GeoLite2-City.tar.gz
+ rm -f *.mmdb

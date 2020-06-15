@@ -1,0 +1,10 @@
+*.conf
+*.backup.*
+*.db
+*.log
+*.new.*
+__pycache__/
+*.sh
+*.shelve
+*.swp
+deugniets.conf

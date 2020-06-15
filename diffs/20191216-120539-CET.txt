@@ -1,0 +1,450 @@
+diff --git a/deugniets.py b/deugniets.py
+index aaae287..7465bc0 100644
+--- a/deugniets.py
++++ b/deugniets.py
+@@ -1,7 +1,7 @@
+ #!/usr/bin/env python3
+ '''
+ =======================================================================
+- deugniets.py v2.60-20191204 Copyright 2019 by cbuijs@chrisbuijs.com
++ deugniets.py v2.631-20191216 Copyright 2019 by cbuijs@chrisbuijs.com
+ =======================================================================
+ 
+  Based on: https://github.com/supriyo-biswas/adblock-dns-server
+@@ -83,6 +83,9 @@ from IPy import IP
+ import base64
+ from hyper.contrib import HTTP20Adapter
+ 
++# GeoIP
++import geoip2.database
++
+ # Cache
+ # https://github.com/dnaeon/py-vconnector/blob/master/src/vconnector/cache.py
+ # https://www.reddit.com/r/Python/comments/2uik3q/expiring_inmemory_cache_module/
+@@ -92,6 +95,7 @@ from cache import CachedObject, CacheInventory
+ cache = CacheInventory(maxsize=65535, housekeeping=60, name='DNS-Cache')
+ listed_cache = CacheInventory(maxsize=16384, housekeeping=60, name='Label-Cache')
+ unfilter_cache = CacheInventory(maxsize=512, housekeeping=60, name='UnFilter')
++rr_cache = CacheInventory(maxsize=65535, housekeeping=60, name='RR-Cache')
+ 
+ # Lists
+ wl_dom = dict()
+@@ -102,6 +106,8 @@ wl_ip6 = pytricia.PyTricia(128, socket.AF_INET6)
+ bl_ip6 = pytricia.PyTricia(128, socket.AF_INET6)
+ wl_rx = dict()
+ bl_rx = dict()
++wl_geo = dict()
++bl_geo = dict()
+ alias = dict()
+ forwarder = dict()
+ forcettl = dict()
+@@ -121,9 +127,6 @@ command_acl6['0::1/128'] = True
+ 
+ # vars
+ dummy = '#!#!DUMMY!#!#'
+-abusecount = 0
+-maxabusecount = 1000
+-abusecountday = time.strftime('%d')
+ 
+ # Domain Regex
+ is_dom = regex.compile('(?=^.{1,253}[a-z][\.]*$)(^((?!-)[a-z0-9_-]{0,62}[a-z0-9]\.)*(xn--[a-z0-9-]{1,59}|[a-z]{2,63})[\.]*$)', regex.I) # Includes underscore
+@@ -167,10 +170,13 @@ is_aft = regex.compile('^(\+|.*[=>!]).*$', regex.I)
+ is_unfilter = regex.compile('^\+.*$', regex.I)
+ 
+ # Is DoH or DoT
+-#is_dox = regex.compile("^(dns|https|tls)://(?!(do[ht]|ip(v)*)[46]\.).*$", regex.I)
+-is_dox = regex.compile("^(dn|http|tl)s://.*$", regex.I)
+-is_dox4 = regex.compile("^(dn|http|tl)s://(do[ht]|ip(v)*)4\..*$", regex.I)
+-is_dox6 = regex.compile("^(dn|http|tl)s://(do[ht]|ip(v)*)6\..*$", regex.I)
++#is_dox = regex.compile('^(dns|https|tls)://(?!(do[ht]|ip(v)*)[46]\.).*$', regex.I)
++is_dox = regex.compile('^(dn|http|tl)s://.*$', regex.I)
++is_dox4 = regex.compile('^(dn|http|tl)s://(do[ht]|ip(v)*)4\..*$', regex.I)
++is_dox6 = regex.compile('^(dn|http|tl)s://(do[ht]|ip(v)*)6\..*$', regex.I)
++
++# GEO
++is_geo = regex.compile('^@.*$', regex.I)
+ 
+ #####################################################################
+ 
+@@ -185,8 +191,8 @@ def _getaddrinfo(host, port=53, family=0, type=0, proto=0, flags=0):
+         result = _socket.getaddrinfo(host, port, family, type, proto, flags)
+         cache.add(obj=CachedObject(name=cachename, obj=result, ttl=config['min_ttl'])) # Cache 40 mins, see: https://blog.apnic.net/2019/11/12/stop-using-ridiculously-low-dns-ttls/
+ 
+-    #ips = list((map(lambda x: x[4][0], result)))
+-    #logging.debug('GETADDRINFO-{0}: {1} -> {2}'.format(tag, host, ', '.join(ips)))
++    ips = list((map(lambda x: x[4][0], result)))
++    logging.info('GETADDRINFO-{0}: {1} -> {2}'.format(tag, host, ', '.join(ips)))
+     return result
+ 
+ socket.getaddrinfo = _getaddrinfo
+@@ -374,7 +380,7 @@ def encode_0x20(st):
+     return st.lower()
+ 
+ 
+-def read_list(filenames, listname, domlst, ip4lst, ip6lst, rxlst, unlst, unip4, unip6):
++def read_list(filenames, listname, domlst, ip4lst, ip6lst, rxlst, unlst, unip4, unip6, geolst):
+     '''Get lists from either file or URL'''
+     for filename in filenames:
+ 
+@@ -408,6 +414,10 @@ def read_list(filenames, listname, domlst, ip4lst, ip6lst, rxlst, unlst, unip4,
+                         except BaseException as err:
+                             logging.warning('LIST ({0}) [#{1}]: Invalid Syntax: \"{2}\" - \"{3}\" - {4}'.format(lname, count, line, entry, err))
+ 
++                    elif (config['filter_request'] or config['filter_response']) and is_geo.search(entry):
++                        entry = entry.lstrip('@')
++                        geolst[entry.upper()] = entry
++
+                     elif is_alias.search(entry):
+                         datatype = False
+                         domain, value = get_value(entry, '=', is_rc.search, False)
+@@ -485,7 +495,7 @@ def read_list(filenames, listname, domlst, ip4lst, ip6lst, rxlst, unlst, unip4,
+ 
+             logging.info('PROCESS-LIST ({0}): Finished processing ...'.format(lname))
+ 
+-    return domlst, ip4lst, ip6lst, rxlst, unlst, unip4, unip6
++    return domlst, ip4lst, ip6lst, rxlst, unlst, unip4, unip6, geolst
+ 
+ 
+ def get_value(entry, sepp, filt, addvalue):
+@@ -653,7 +663,7 @@ def expand_ip(ip):
+ # DO SOMETHING WITH THIS !!!!
+ def is_formerr(rtype, value, qtype):
+     '''Check if weird'''
+-    if config['blockweird']:
++    if config['filtering'] and config['blockweird']:
+         #logging.debug('{0}-FORMERR-CHECK: {1}/{2}'.format(rtype, value, qtype))
+         value = str(value)
+ 
+@@ -848,8 +858,8 @@ def check_if_blacklisted(testvalue, valuetype, checkip):
+             checkip = True
+             testvalue = ip
+ 
+-    # Check against IP4
+     if checkip:
++        # Check against IP4
+         if is_ip4.search(testvalue):
+             #logging.debug('CHECK-{0}: {1} is an IPv4-Address'.format(valuetype, testvalue))
+             # Check if IPv4 is whitelisted
+@@ -864,8 +874,8 @@ def check_if_blacklisted(testvalue, valuetype, checkip):
+                     return True
+ 
+ 
+-    # Check against IP6
+-        elif is_ip6.search(testvalue):
++        # Check against IP6
++        if is_ip6.search(testvalue):
+             #logging.debug('CHECK-{0}: {1} is an IPv6-Address'.format(valuetype, testvalue))
+             # Check if IPv6 is whitelisted
+             if check_ip(valuetype, testvalue, orgtestvalue, wl_ip6, 'WHITELIST', False):
+@@ -878,6 +888,13 @@ def check_if_blacklisted(testvalue, valuetype, checkip):
+                 else:
+                     return True
+ 
++        # Check against GEO
++        if check_geo(valuetype, testvalue, wl_geo, 'WHITELIST'):
++            return False
++
++        elif check_geo(valuetype, testvalue, bl_geo, 'BLACKLIST'):
++            return True
++  
+         # !!! Goes fast and uses up quota
+         #if check_badip(testvalue):
+         #    return True
+@@ -1013,11 +1030,55 @@ def check_ip(valuetype, testvalue, orgtestvalue, iplist, listname, rc):
+     return False
+ 
+ 
+-#!!!! FIX - Checks loopback somehow. !!!!
++def check_geo(valuetype, testvalue, geolst, listname):
++    if config['geodb']:
++        gip = False
++        try:
++            gip = geoip.city(testvalue)
++        except:
++            pass
++
++        if gip:
++            if gip.city.name and gip.city.name.upper() in geolst:
++                if config['log_hits'] and listname:
++                    logging.warning('{0}-GEO-CITY-HIT [{1}]: {2} -> {3}'.format(valuetype, listname, testvalue, gip.city.name.upper()))
++                    return True
++
++            if gip.subdivisions.most_specific.name and gip.subdivisions.most_specific.name.upper() in geolst:
++                if config['log_hits'] and listname:
++                    logging.warning('{0}-GEO-AREA-HIT [{1}]: {2} -> {3}'.format(valuetype, listname, testvalue, gip.subdivisions.most_specific.name.upper()))
++                    return True
++
++            if gip.country.name and gip.country.name.upper() in geolst:
++                if config['log_hits'] and listname:
++                    logging.warning('{0}-GEO-COUNTRY-HIT [{1}]: {2} -> {3}'.format(valuetype, listname, testvalue, gip.country.name.upper()))
++                    return True
++
++            if gip.continent.name and gip.continent.name.upper() in geolst:
++                if config['log_hits'] and listname:
++                    logging.warning('{0}-GEO-CONTINENT-HIT [{1}]: {2} -> {3}'.format(valuetype, listname, testvalue, gip.continent.name.upper()))
++                    return True
++
++    return False
++
++
++# !!! FIX - Better handling of quotas per dat for AbuseIPDB
+ def check_badip(cip):
+-    global abusecount
+-    global maxabusecount
+-    global abusecountday
++
++    if config['filtering'] is False:
++        return False
++
++    count = 0
++    while count < config['retry_count'] and cip in beingchecked:
++        count += 1
++        logging.debug('{0}-BADIP-SLEEP: {1} (#{2})'.format(valuetype, cip, count))
++        time.sleep(config['retry_wait'])
++
++    if count >= config['retry_count']:
++        logging.error('{0}-BADIP-FAIL: {1} - Took to long to check'.format(valuetype, cip, count))
++        return False
++
++    beingchecked.add(cip)
+ 
+     if is_ip.search(cip):
+         if cip.find(':') > 0:
+@@ -1030,11 +1091,13 @@ def check_badip(cip):
+         if cip in wl_ip:
+             #if config['log_hits']:
+                 #logging.debug('ACL-WHITELIST-HIT: Client {0} -> {1}'.format(cip, wl_ip.get_key(cip)))
++            beingchecked.discard(cip)
+             return False
+ 
+         elif cip in bl_ip:
+             if config['log_hits']:
+                 logging.warning('ACL-BLACKLIST-HIT: Client {0} -> {1}'.format(cip, bl_ip.get_key(cip)))
++            beingchecked.discard(cip)
+             return True
+ 
+         elif config['abuseipdbkey']:
+@@ -1047,59 +1110,56 @@ def check_badip(cip):
+             querystring = {'ipAddress': cip, 'maxAgeInDays': '90'}
+             headers = {'Accept': 'application/json', 'Key': config['abuseipdbkey']}
+ 
+-            day = time.strftime('%d')
+-            if abusecountday != day:
+-                abusecount = 0
+-                abusecountday = day
+-
+-            if abusecount < maxabusecount:
+-                count = 0
+-                while count < 3:
+-                    count += 1
+-                    abusecount += 1
+-
+-                    try:
+-                        response = abuseipdb_session.get(url, timeout=5, headers=headers, params=querystring, allow_redirects=False, proxies=None, stream=True)
+-                        if response:
+-                            if response.status_code == 200:
+-                                ipcheck = json.loads(response.text)
+-                                break
+-                            else:
+-                                logging.error('ABUSEIPDB-GET-ERROR: {0} - {1}'.format(cip, response.status_code))
+-
+-                            #logging.debug('ABUSEIPDB-JSON-DEBUG: {0}'.format(json.dumps(ipcheck, sort_keys=True, indent=4)))
++            count = 0
++            while count < 3:
++                count += 1
+ 
+-                    except BaseException as err:
+-                        logging.error('ABUSEIPDB-ERROR: {0} - {1}'.format(cip, err))
++                try:
++                    response = abuseipdb_session.get(url, timeout=5, headers=headers, params=querystring, allow_redirects=False, proxies=None, stream=True)
++                    if response.status_code == 200:
++                        limit = int(response.headers['X-RateLimit-Limit'])
++                        remain = int(response.headers['X-RateLimit-Remaining'])
++
++                        logging.info('ABUSEIPDB-COUNT: {0}/{1}'.format(limit - remain, limit)) # Make debug
++
++                        ipcheck = json.loads(response.text)
++                        #logging.debug('ABUSEIPDB-JSON-DEBUG: {0}'.format(json.dumps(ipcheck, sort_keys=True, indent=4)))
++                        break
++                    elif response.status_code == 429:
++                        ipcheck = 'MAX'
++                        logging.warning('ABUSEIPDB-USAGE: {0} - Max usage reached'.format(cip))
++                        break
++                    else:
++                        logging.error('ABUSEIPDB-GET-ERROR: {0} - {1} (#{2})'.format(cip, response.status_code, count))
+ 
+-                    time.sleep(0.3)
+ 
+-                if ipcheck:
+-                    score = ipcheck['data']['abuseConfidenceScore']
+-                    logging.info('ABUSEIPDB-SCORE: {0} = {1}% ({2} - {3})'.format(cip, score, ipcheck['data']['countryCode'], ipcheck['data']['isp']))
++                except BaseException as err:
++                    logging.error('ABUSEIPDB-ERROR: {0} - {1} (#{2})'.format(cip, err, count))
+ 
+-                    if score and score > 90:
+-                        if config['log_hits']:
+-                            logging.warning('ABUSEIPDB-BLACKLIST-HIT: Score for Client {0} = {1}%'.format(cip, score))
+-                        bl_ip[cip] = True
+-                        return True
++                time.sleep(config['retry_wait'])
+ 
+-                else:
+-                    logging.error('ABUSEIPDB-ERROR: {0} - No/Empty Response'.format(cip))
+-                    abusecount = maxabusecount
++            if ipcheck and ipcheck != 'MAX':
++                score = ipcheck['data']['abuseConfidenceScore']
++                logging.info('ABUSEIPDB-SCORE: {0} = {1}% ({2} - {3})'.format(cip, score, ipcheck['data']['countryCode'], ipcheck['data']['isp']))
+ 
+-            else:
+-                logging.warning('ABUSEIPDB: {0} - Maximum requests ({1}) hit'.format(cip, maxabusecount))
++                if score and score > 90:
++                    if config['log_hits']:
++                        logging.warning('ABUSEIPDB-BLACKLIST-HIT: Score for Client {0} = {1}%'.format(cip, score))
++                    bl_ip[cip] = True
++                    beingchecked.discard(cip)
++                    return True
+ 
+ 
+         if dnsl_check(config['dnsbl'], cip, True):
+             if config['log_hits']:
+                 logging.warning('ACL-DNSBL-BLACKLIST-HIT: {1}'.format(cip))
+             bl_ip[cip] = True
++            beingchecked.discard(cip)
+             return True
+ 
+-        wl_ip[cip] = True # !!! Use something else, will work for now
++        wl_ip[cip] = True # !!! Use something else, will work for now - Can be utilized/misused to auto-whitelist when flooding
+ 
++    beingchecked.discard(cip)
+     return False
+ 
+ 
+@@ -1736,7 +1796,7 @@ def dns_query(name, rdclass, rdtype, qid, cip, unfilter, fttl):
+ 
+                 soa = dns.rrset.from_text(qname, ttl, 'IN', 6, "{0}.{1} {2}.{1} 1 60 60 60 60".format(dns.rcode.to_text(rcode).lower(), qname, qrdtype.lower()))
+                 rv = (rcode, [], [soa], [])
+-     
++
+             cache.add(obj=CachedObject(name=cachename, obj=rv + (returnstatus,), ttl=ttl))
+ 
+     else:
+@@ -1884,6 +1944,7 @@ def clear_caches():
+     cache.clear()
+     listed_cache.clear()
+     unfilter_cache.clear()
++    rr_cache.clear()
+     queryhits.clear()
+     gc.collect() # Collect garbage
+     return True
+@@ -1985,7 +2046,10 @@ def log_response(qname, qtype, answer, rcode, tag, spoofedname, qid):
+                             if rdtype == 'CNAME' and config['collapse']:
+                                 logging.info('{0} [{1}:{2}/{3}-{4}/{5}#{6}]: {7} {8} IN {9} {10} (COLLAPSE-CANDIDATE)'.format(tag, qid, rrsetcount, rrsetcounttotal, rrcount, rrcounttotal, count, rrset.name, rrset.ttl, rdtype, rr))
+                             else:
+-                                logging.info('{0} [{1}:{2}/{3}-{4}/{5}#{6}]: {7} {8} IN {9} {10}'.format(tag, qid, rrsetcount, rrsetcounttotal, rrcount, rrcounttotal, count, rrset.name, rrset.ttl, rdtype, rr))
++                                if rdtype in ('A', 'AAAA'):
++                                    logging.info('{0} [{1}:{2}/{3}-{4}/{5}#{6}]: {7} {8} IN {9} {10} ({11})'.format(tag, qid, rrsetcount, rrsetcounttotal, rrcount, rrcounttotal, count, rrset.name, rrset.ttl, rdtype, rr, geo(rr)))
++                                else:
++                                    logging.info('{0} [{1}:{2}/{3}-{4}/{5}#{6}]: {7} {8} IN {9} {10}'.format(tag, qid, rrsetcount, rrsetcounttotal, rrcount, rrcounttotal, count, rrset.name, rrset.ttl, rdtype, rr))
+         elif rcode == 'NOERROR':
+             logging.info('{0} [{1}]: {2}/IN/{3} = NOERROR/NODATA'.format(tag, qid, qname, qtype))
+         else:
+@@ -2003,6 +2067,20 @@ def make_response(query):
+     return response
+ 
+ 
++
++def geo(client_ip):
++    cip = str(client_ip)
++    if config['geodb'] and is_ip.search(cip):
++        try:
++            gip = geoip.city(cip)
++            if gip:
++                return '{0}/{1}/{2}/{3}'.format(gip.city.name or '-', gip.subdivisions.most_specific.name or '-', gip.country.name or '-', gip.continent.name or '-')
++        except:
++            pass
++
++    return '-/-/-/-'
++
++
+ def handle_query(raw_data, client_ip):
+     '''Handle Query'''
+     try:
+@@ -2022,6 +2100,9 @@ def handle_query(raw_data, client_ip):
+                     client_ip = IP('{0}/{1}'.format(opt.ip, opt.mask)).strNormal(0)
+                     break
+ 
++
++    logging.info('GEOIP: {0} - {1}'.format(client_ip, geo(client_ip)))
++
+     name = str(query.question[0].name).lower()
+ 
+     cip = str(client_ip)
+@@ -2093,6 +2174,7 @@ def handle_query(raw_data, client_ip):
+                     unfilter_cache.add(obj=CachedObject(name=name, obj=True, ttl=config['unfilter_ttl']))
+                     logging.info('UNFILTER-NAME [{0}]: From {1} for {2} ({3})'.format(query.id, cip, queryname, match))
+ 
++
+         result = dns_query(name, rdclass, rdtype, query.id, cip, unfilter, False)
+ 
+     if config['min_resp'] and result[0] == 0:
+@@ -2222,7 +2304,7 @@ def run_server():
+     # !!! TODO: Define bootstrap servers to use to resolve below
+     newnameservers = list()
+     for dnsserver in config['nameservers']:
+-        if dnsserver.startswith('tls://'):
++        if dnsserver.startswith('tls://') and dnsserver.find('#') == -1:
+             hostname = dnsserver.split('/')[2]
+             ips = list((map(lambda x: x[4][0], socket.getaddrinfo('{0}.'.format(hostname.rstrip('.')), 53, type=socket.SOCK_STREAM))))
+             logging.info('TLS-RESOLUTION: {0} -> {1}'.format(hostname, ', '.join(ips)))
+@@ -2275,6 +2357,9 @@ if __name__ == '__main__':
+     # AbuseIPDB
+     config['abuseipdbkey'] = False
+ 
++    # GeoIP DB
++    config['geodb'] = '/opt/deugniets/GeoLite2-City.mmdb'
++
+     # Cache Settings
+     config['blacklist_cache_ttl'] = 60
+     config['blacklist_ttl'] = 3600
+@@ -2418,8 +2503,8 @@ if __name__ == '__main__':
+                 logging.warning('TLDS: NO TLDs from \"{0}\"'.format(config['tld_url']))
+                 config['check_tld'] = False
+ 
+-        wl_dom, wl_ip4, wl_ip6, wl_rx, ul_dom, ul_ip4, ul_ip6 = read_list(config['whitelist'], 'WhiteList', wl_dom, wl_ip4, wl_ip6, wl_rx, ul_dom, ul_ip4, ul_ip6)
+-        bl_dom, bl_ip4, bl_ip6, bl_rx, _, _, _ = read_list(config['blacklist'], 'BlackList', bl_dom, bl_ip4, bl_ip6, bl_rx, dict(), dict(), dict())
++        wl_dom, wl_ip4, wl_ip6, wl_rx, ul_dom, ul_ip4, ul_ip6, wl_geo = read_list(config['whitelist'], 'WhiteList', wl_dom, wl_ip4, wl_ip6, wl_rx, ul_dom, ul_ip4, ul_ip6, wl_geo)
++        bl_dom, bl_ip4, bl_ip6, bl_rx, _, _, _, bl_geo = read_list(config['blacklist'], 'BlackList', bl_dom, bl_ip4, bl_ip6, bl_rx, dict(), dict(), dict(), bl_geo)
+ 
+         if config['unfilter_whitelist']:
+             ul_dom = add_list(ul_dom, wl_dom.keys(), 'UNFILTER-WHITELIST')
+@@ -2509,12 +2594,18 @@ if __name__ == '__main__':
+     requests_session.mount('https://', HTTP20Adapter())
+     abuseipdb_session = requests.Session()
+ 
++    # Geo-IP
++    if config['geodb']:
++        geoip = geoip2.database.Reader(config['geodb'])
++
+     # Run
+     run_server()
+ 
+     # Terminate
+     requests_session.close()
+     abuseipdb_session.close()
++    geoip.close()
++ 
+     logging.info('SERVER: DeugNietS Stopped')
+ 
+     sys.exit(0)
+diff --git a/requirements.txt b/requirements.txt
+index 814331d..0fb8330 100644
+--- a/requirements.txt
++++ b/requirements.txt
+@@ -1,6 +1,7 @@
+ chardet==3.0.4 # Latest version supported by requests
+ clientsubnetoption>=2.1.1
+ dnspython>=2.0.0
++geoip2>=2.9.0         
+ hyper>=0.7.0
+ idna>=2.8
+ IPy>=1.0

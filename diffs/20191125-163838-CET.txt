@@ -1,0 +1,86 @@
+diff --git a/deugniets.py b/deugniets.py
+index 7983090..452c20e 100644
+--- a/deugniets.py
++++ b/deugniets.py
+@@ -89,7 +89,7 @@ from hyper.contrib import HTTP20Adapter
+ #from ratelimit import limits, sleep_and_retry
+ 
+ # AbuseIPDB
+-
++from abuseipdb import *
+ 
+ # Cache
+ # https://github.com/dnaeon/py-vconnector/blob/master/src/vconnector/cache.py
+@@ -127,6 +127,9 @@ command_acl4['127.0.0.1/32'] = True
+ command_acl4['192.168.0.0/16'] = True
+ command_acl6['0::1/128'] = True
+ 
++abuse_ip4 = pytricia.PyTricia(32, socket.AF_INET)
++abuse_ip6 = pytricia.PyTricia(128, socket.AF_INET6)
++
+ # vars
+ dummy = '#!#!DUMMY!#!#'
+ 
+@@ -858,6 +861,20 @@ def check_if_blacklisted(testvalue, valuetype, checkip):
+                 else:
+                     return True
+ 
++        elif config['abuseipdbkey']:
++            score = False
++            if testvalue in abuse_ip4:
++                score = abuse_ip4.get(testvalue)
++            else:
++                ipcheck = ipdb.check(testvalue)
++                if ipcheck:
++                    score = ipcheck.abuseConfidenceScore
++
++                abuse_ip4[testvalue] = score
++
++            if score:
++                logging.info('ABUSEIPDB: {0} = {1}'.format(testvalue, score))
++
+     # Check against IP6
+         elif is_ip6.search(testvalue):
+             #logging.debug('CHECK-{0}: {1} is an IPv6-Address'.format(valuetype, testvalue))
+@@ -872,6 +889,20 @@ def check_if_blacklisted(testvalue, valuetype, checkip):
+                 else:
+                     return True
+ 
++        elif config['abuseipdbkey']:
++            score = False
++            if testvalue in abuse_ip6:
++                score = abuse_ip6.get(testvalue)
++            else:
++                ipcheck = ipdb.check(testvalue)
++                if ipcheck:
++                    score = ipcheck.abuseConfidenceScore
++
++                abuse_ip6[testvalue] = score
++
++            if score:
++                logging.info('ABUSEIPDB: {0} = {1}'.format(testvalue, score))
++
+     # Check against regex
+     #logging.debug('CHECK-RX: {0}'.format(orgtestvalue))
+     #match = check_rx(orgtestvalue, wl_rx)
+@@ -2167,6 +2198,9 @@ if __name__ == '__main__':
+     config['nameservers'] = ['9.9.9.9', '149.112.112.112', '2620:fe::9', '2620:fe::fe:9']
+     config['safe_nameservers'] = False
+ 
++    # AbuseIPDB
++    config['abuseipdbkey'] = False
++
+     # Cache Settings
+     config['blacklist_cache_ttl'] = 60
+     config['blacklist_ttl'] = 3600
+@@ -2391,6 +2425,10 @@ if __name__ == '__main__':
+     # Setup nameservers
+     setup_nameservers()
+ 
++    # AbuseIPDB setup
++    if config['abuseipdbkey']:
++        ipdb = AbuseIPDB(config['abuseipdbkey'])
++
+     # Setup requests sessions
+     requests_session = requests.Session()
+     requests_session.mount('https://', HTTP20Adapter())

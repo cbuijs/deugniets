@@ -1,0 +1,28 @@
+diff --git a/deugniets.py b/deugniets.py
+index 1a3a825..458799e 100644
+--- a/deugniets.py
++++ b/deugniets.py
+@@ -1606,9 +1606,9 @@ def geonames(geoname):
+    
+ def geosteer(cip, qname, answer):
+     if config['geo_steer'] and is_ip.search(cip) and answer:
+-        ciptype = 1
+-        if cip.find(':') > -1:
+-            ciptype = 28
++        #ciptype = 1
++        #if cip.find(':') > -1:
++        #    ciptype = 28
+ 
+         geoinfo = geo(cip)
+         steerlist = geonames(geoinfo)
+@@ -1623,8 +1623,8 @@ def geosteer(cip, qname, answer):
+                 rrdatalist = list(map(str, rrset))
+                 newrrdata = list()
+                 geodata = set()
+-                #if rrset.rdtype in (1, 28) and len(rrdatalist) > 1:
+-                if rrset.rdtype == ciptype and len(rrdatalist) > 1:
++                #if rrset.rdtype == ciptype and len(rrdatalist) > 1:
++                if rrset.rdtype in (1, 28) and len(rrdatalist) > 1:
+                     for ip in rrdatalist:
+                         geoname = check_geo(qname, 'IP', ip, steerlist, 'GEOSTEER')
+                         if geoname:

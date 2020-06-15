@@ -1,0 +1,60 @@
+diff --git a/deugniets.py b/deugniets.py
+index 46dab52..ae8649b 100644
+--- a/deugniets.py
++++ b/deugniets.py
+@@ -1,7 +1,7 @@
+ #!/usr/bin/env python3
+ '''
+ ===========================================================================
+- deugniets.py v3.267-20200613 Copyright 2019-2020 by cbuijs@chrisbuijs.com
++ deugniets.py v3.27-20200615 Copyright 2019-2020 by cbuijs@chrisbuijs.com
+ ===========================================================================
+ 
+  Based on: https://github.com/supriyo-biswas/adblock-dns-server
+@@ -447,6 +447,8 @@ def cleansplit(s):
+ 
+ 
+ def make_trie(dlist, listname, keepval):
++    logging.info('MAKE-TRIE: {0}'.format(listname))
++
+     new_trie = pygtrie.StringTrie(separator='.')
+     for key in dlist.keys():
+         if keepval:
+@@ -1634,7 +1636,7 @@ def geosteer(cip, qname, answer):
+                         #if config['log_verbose']:
+                         #    logging.info('GEO-STEER-RR: {0}/{1} = {2} ({3})'.format(rrname, rdtypet, ip, geo(ip)))
+ 
+-                        geoname = check_geo(qname, 'IP', ip, steerlist, 'GEOSTEER')
++                        geoname = check_geo(qname, 'IP', ip, steerlist, False)
+                         if geoname:
+                             if config['log_verbose']:
+                                 logging.info('GEO-STEER: Client {0} ({1}) close to {2} ({3}) for {4}/{5}'.format(cip, geoinfo, ip, geoname, rrname, rdtypet))
+@@ -1756,20 +1758,20 @@ def dns_query(name, rdclass, rdtype, qid, cip, unfilter, fttl):
+     blacklistname = False
+ 
+     ip6 = None
+-
+     if is_ip.search(cip):
+         ip6 = False
+-        bits = config['cache_ip4_bits'] or 24
+         if cip.find(':') > -1:
+             ip6 = True
+-            bits = config['cache_ip6_bits'] or 56
+ 
+-        cache_ip = '{0}'.format(IP(cip).make_net(str(bits)).strNormal(0))
+-        logging.info('CACHE-IP: {0} -> {1} (/{2})'.format(cip, cache_ip, bits))
+-        cachename = '{0}/{1}'.format(cachename, cache_ip)
++        if config['use_ecs_ip']:
++            if ip6:
++                bits = config['cache_ip6_bits'] or 56
++            else:
++                bits = config['cache_ip4_bits'] or 24
+ 
+-        #if cip not in private4 and cip not in private6:
+-        #    cachename = '{0}/PUBLIC'.format(cachename)
++            cache_ip = '{0}'.format(IP(cip).make_net(str(bits)).strNormal(0))
++            logging.info('CACHE-IP: {0} -> {1} (/{2})'.format(cip, cache_ip, bits))
++            cachename = '{0}/{1}'.format(cachename, cache_ip)
+ 
+     else:
+         unfilter = True

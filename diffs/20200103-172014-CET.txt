@@ -1,0 +1,30 @@
+diff --git a/deugniets.py b/deugniets.py
+index 1111282..34932fe 100644
+--- a/deugniets.py
++++ b/deugniets.py
+@@ -1,7 +1,7 @@
+ #!/usr/bin/env python3
+ '''
+ ===========================================================================
+- deugniets.py v2.664-20200103 Copyright 2019-2020 by cbuijs@chrisbuijs.com
++ deugniets.py v2.665-20200103 Copyright 2019-2020 by cbuijs@chrisbuijs.com
+ ===========================================================================
+ 
+  Based on: https://github.com/supriyo-biswas/adblock-dns-server
+@@ -2429,11 +2429,15 @@ def run_server():
+                     getaddrinfo = []
+                     for ip in dnsips:
+                         if not check_geo('NEXTDNS-IP', ip, bl_geo, 'BLACKLIST'):
+-                            logging.info('NEXTDNS-SERVER-ADDED: {0} = {1} ({2})'.format(dnsurl, ip, geo(ip)))
+                             if ip.find(':') > 0:
++                                tag = 'IPV6'
+                                 getaddrinfo.append((10, 1, 6, '', (ip, 443, 0, 0)))
+                             else:
++                                tag = 'IPV4'
+                                 getaddrinfo.append((2, 1, 6, '', (ip, 443)))
++
++                            logging.info('NEXTDNS-{0}-SERVER-ADDED: {1} = {2} ({3})'.format(tag, dnsurl, ip, geo(ip)))
++
+                         else:
+                             logging.info('NEXTDNS-SERVER-DISCARDED: {0} ({1})'.format(dnsurl, geo(ip)))
+                             getaddrinfo = []

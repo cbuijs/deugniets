@@ -1,0 +1,139 @@
+diff --git a/Dockerfile b/Dockerfile
+index c4da43f..d4f3149 100644
+--- a/Dockerfile
++++ b/Dockerfile
+@@ -15,7 +15,6 @@ ADD local.list.docker /opt/deugniets/local.list
+ RUN pip3 install --upgrade pip
+ RUN pip3 install --upgrade chardet==3.0.4
+ RUN pip3 install --upgrade urllib3==1.25.7
+-RUN pip3 install --upgrade git+https://github.com/sl4vkek/python-abuseipdb@master
+ RUN pip3 install --upgrade git+https://github.com/opendns/dnspython-clientsubnetoption@master
+ RUN pip3 install --upgrade git+https://github.com/rthalley/dnspython@master
+ RUN pip3 install --upgrade git+https://github.com/psf/requests@master
+diff --git a/deugniets.py b/deugniets.py
+index 69ded0e..0413372 100644
+--- a/deugniets.py
++++ b/deugniets.py
+@@ -83,9 +83,6 @@ from IPy import IP
+ import base64
+ from hyper.contrib import HTTP20Adapter
+ 
+-# AbuseIPDB
+-from abuseipdb import *
+-
+ # Cache
+ # https://github.com/dnaeon/py-vconnector/blob/master/src/vconnector/cache.py
+ # https://www.reddit.com/r/Python/comments/2uik3q/expiring_inmemory_cache_module/
+@@ -122,9 +119,6 @@ command_acl4['127.0.0.1/32'] = True
+ command_acl4['192.168.0.0/16'] = True
+ command_acl6['0::1/128'] = True
+ 
+-abuse_ip4 = pytricia.PyTricia(32, socket.AF_INET)
+-abuse_ip6 = pytricia.PyTricia(128, socket.AF_INET6)
+-
+ # vars
+ dummy = '#!#!DUMMY!#!#'
+ 
+@@ -1020,20 +1014,20 @@ def check_ip(valuetype, testvalue, orgtestvalue, iplist, listname, rc):
+ def check_badip(cip):
+     if is_ip.search(cip):
+         if cip.find(':') > 0:
+-            abuse_ip = abuse_ip6
+             wl_ip = wl_ip6
+             bl_ip = bl_ip6
+         else:
+-            abuse_ip = abuse_ip4
+             wl_ip = wl_ip4
+             bl_ip = bl_ip4
+     
+         if cip in wl_ip:
+-            logging.info('ACL-WHITELIST-HIT: Client {0} -> {1}'.format(cip, wl_ip.get_key(cip)))
++            #if config['log_hits']:
++                #logging.debug('ACL-WHITELIST-HIT: Client {0} -> {1}'.format(cip, wl_ip.get_key(cip)))
+             return False
+ 
+         elif cip in bl_ip:
+-            logging.warning('ACL-BLACKLIST-HIT: Client {0} -> {1}'.format(cip, bl_ip.get_key(cip)))
++            if config['log_hits']:
++                logging.warning('ACL-BLACKLIST-HIT: Client {0} -> {1}'.format(cip, bl_ip.get_key(cip)))
+             return True
+ 
+         elif config['abuseipdbkey']:
+@@ -1041,23 +1035,37 @@ def check_badip(cip):
+             ipcheck = False
+ 
+             try:
+-                ipcheck = ipdb.check(cip)
++                #logging.debug('ABUSEIPDB-CHECK: {0}'.format(cip))
++
++                url = 'https://api.abuseipdb.com/api/v2/check'
++                querystring = {'ipAddress': cip, 'maxAgeInDays': '90'}
++                headers = {'Accept': 'application/json', 'Key': config['abuseipdbkey']}
++
++                response = abuseipdb_session.get(url, timeout=5, headers=headers, params=querystring, allow_redirects=False, proxies=None, stream=True)
++                ipcheck = json.loads(response.text)
++
++                #logging.debug('ABUSEIPDB-JSON-DEBUG: {0}'.format(json.dumps(ipcheck, sort_keys=True, indent=4)))
+ 
+             except BaseException as err:
+                 logging.error('ABUSEIPDB-ERROR: {0} - {1}'.format(cip, err))
+-                ipcheck = False
+-                pass #!!! Fix?
+ 
+             if ipcheck:
+-                logging.info('ABUSEIPDB-CHECK: {0} ({1} - {2})'.format(cip, ipcheck.isp, ipcheck.countryName))
+-                score = ipcheck.abuseConfidenceScore
++                score = ipcheck['data']['abuseConfidenceScore']
++                logging.info('ABUSEIPDB-SCORE: {0} = {1}% ({2} - {3})'.format(cip, score, ipcheck['data']['countryCode'], ipcheck['data']['isp']))
+ 
+                 if score and score > 90:
+-                    logging.warning('ABUSEIPDB-BLACKLIST-HIT: Score for Client {0} = {1}'.format(cip, score))
++                    if config['log_hits']:
++                        logging.warning('ABUSEIPDB-BLACKLIST-HIT: Score for Client {0} = {1}%'.format(cip, score))
+                     bl_ip[cip] = True
+                     return True
+-                else:
+-                    wl_ip[cip] = True
++
++        if dnsl_check(config['dnsbl'], cip, True):
++            if config['log_hits']:
++                logging.warning('ACL-DNSBL-BLACKLIST-HIT: {1}'.format(cip))
++            bl_ip[cip] = True
++            return True
++
++        wl_ip[cip] = True # !!! Use something else, will work for now
+ 
+     return False
+ 
+@@ -2460,17 +2468,18 @@ if __name__ == '__main__':
+     # AbuseIPDB setup
+     if config['abuseipdbkey']:
+         logging.info('ABUSEIPDB: API-Key = {0}'.format(config['abuseipdbkey']))
+-        ipdb = AbuseIPDB(config['abuseipdbkey'])
+ 
+     # Setup requests sessions
+     requests_session = requests.Session()
+     requests_session.mount('https://', HTTP20Adapter())
++    abuseipdb_session = requests.Session()
+ 
+     # Run
+     run_server()
+ 
+     # Terminate
+     requests_session.close()
++    abuseipdb_session.close()
+     logging.info('SERVER: DeugNietS Stopped')
+ 
+     sys.exit(0)
+diff --git a/requirements.txt b/requirements.txt
+index 757a649..814331d 100644
+--- a/requirements.txt
++++ b/requirements.txt
+@@ -4,7 +4,6 @@ dnspython>=2.0.0
+ hyper>=0.7.0
+ idna>=2.8
+ IPy>=1.0
+-python-abuseipdb>=1.0.2         
+ python-hosts>=0.4.7         
+ pytricia>=1.0.0
+ regex>=2019.6.8

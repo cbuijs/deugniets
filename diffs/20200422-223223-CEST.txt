@@ -1,0 +1,40 @@
+diff --git a/deugniets.py b/deugniets.py
+index bff5bed..33a1ae4 100644
+--- a/deugniets.py
++++ b/deugniets.py
+@@ -1,7 +1,7 @@
+ #!/usr/bin/env python3
+ '''
+ ===========================================================================
+- deugniets.py v2.89-20200422 Copyright 2019-2020 by cbuijs@chrisbuijs.com
++ deugniets.py v2.891-20200422 Copyright 2019-2020 by cbuijs@chrisbuijs.com
+ ===========================================================================
+ 
+  Based on: https://github.com/supriyo-biswas/adblock-dns-server
+@@ -925,7 +925,7 @@ def check_blacklisted(testvalue, valuetype, checkip):
+                 logging.warning('SPECIFIC-NAME-DOM-HIT [BLACKLIST]: \"{0}\" (Parent \"{1}\" is WHITELISTED)'.format(testvalue, wcheck))
+                 return True
+ 
+-            if config['smartdoms'] and check_dom_smart(valuetype, testvalue, bl_dom, 'WHITELIST-BLACKLIST', True):
++            if config['smartdoms'] and check_dom_smart('WHITELIST', testvalue, bl_dom, 'BLACKLIST', True):
+                 return True
+ 
+             return False
+@@ -1069,7 +1069,7 @@ def check_dom(valuetype, testvalue, domlist, listname, onlyparent, smart):
+ 
+ 
+ def check_dom_smart(valuetype, testvalue, domlist, listname, onlyparent):
+-    cachename = 'SMARTDOM#{0}#{1}#{2}'.format(listname or 'NONE', valuetype, testvalue)
++    cachename = 'DOM#{0}#{1}#{2}'.format(listname or 'NONE', valuetype, testvalue)
+     if cachename in check_cache:
+         return check_cache.get(cachename, False)
+ 
+@@ -1596,7 +1596,7 @@ def dns_query(name, rdclass, rdtype, qid, cip, unfilter, fttl):
+ 
+ 
+     matchf = check_dom('NAME', qname, forwarder, 'FORWARDER', False, False)
+-    if matchf and config['smartdoms'] and check_dom_smart('FORWARDER', qname, bl_dom, 'FORWARDER-BLACKLIST', True):
++    if matchf and config['smartdoms'] and check_dom_smart('FORWARDER', qname, bl_dom, 'BLACKLIST', True):
+         matchf = False
+ 
+     if rv is None and config['filtering'] and config['filter_request'] and unfilter is False and matchf is False:

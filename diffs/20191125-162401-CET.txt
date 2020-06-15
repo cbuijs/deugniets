@@ -1,0 +1,203 @@
+diff --git a/.gitignore b/.gitignore
+index 55370f6..09194a3 100644
+--- a/.gitignore
++++ b/.gitignore
+@@ -7,3 +7,4 @@ __pycache__/
+ *.sh
+ *.shelve
+ *.swp
++deugniets.conf
+diff --git a/Dockerfile b/Dockerfile
+index 3d9e610..58bc227 100644
+--- a/Dockerfile
++++ b/Dockerfile
+@@ -15,6 +15,7 @@ ADD local.list.docker /opt/deugniets/local.list
+ RUN pip3 install --upgrade pip
+ RUN pip3 install --upgrade chardet==3.0.4
+ RUN pip3 install --upgrade urllib3==1.25.7
++RUN pip3 install --upgrade git+https://github.com/sl4vkek/python-abuseipdb@master
+ RUN pip3 install --upgrade git+https://github.com/opendns/dnspython-clientsubnetoption@master
+ RUN pip3 install --upgrade git+https://github.com/rthalley/dnspython@master
+ RUN pip3 install --upgrade git+https://github.com/psf/requests
+diff --git a/deugniets.conf b/deugniets.conf
+deleted file mode 100644
+index bcd44f6..0000000
+--- a/deugniets.conf
++++ /dev/null
+@@ -1,141 +0,0 @@
+-# DEUGNIETS Config file
+-#
+-# CAUTION: USE THIS FILE CAREFULLY AND REVIEW IT FIRST BEFORE USING!!!
+-#
+-# Use JSON syntax for the values, reminder: booleans in lower-case.
+-
+-[DEUGNIETS]
+-# address and Port to listen on
+-port = 53001
+-
+-# DoH servers
+-# https://github.com/curl/curl/wiki/DNS-over-HTTPS#publicly-available-servers
+-#nameservers = ["https://doh.cleanbrowsing.org/doh/adult-filter"]
+-#nameservers = ["https://cloudflare-dns.com/dns-query", "https://dns10.quad9.net/dns-query", "https://dns.google/dns-query"]
+-#nameservers = ["https://cloudflare-dns.com/dns-query"]
+-#nameservers = ["https://cloudflare-dns.com/dns-query", "dns://1.1.1.1", "dns://1.0.0.1"]
+-#nameservers = ["https://dns.google/dns-query"]
+-
+-#nameservers = ["https://dns.quad9.net/dns-query"]
+-
+-#nameservers = ["https://doh.opendns.com/dns-query"]
+-
+-#nameservers = ["https://doh.powerdns.org/"]
+-
+-#nameservers = ["https://dns.quad9.net/dns-query"]
+-#nameservers = ["https://doh.powerdns.org"]
+-#nameservers = ["https://dns.nextdns.io/65fef9/https-nuc"]
+-#nameservers = ["127.0.0.1", "::1"]
+-
+-#nameservers = ["https://ipv4.dns.nextdns.io/126ab2/nuc-deugniets-https4", "https://ipv6.dns.nextdns.io/126ab2/nuc-deugniets-https6", "45.90.28.131", "45.90.30.131", "2a07:a8c0::12:6ab2", "2a07:a8c1::12:6ab2"]
+-nameservers = ["https://ipv4.dns.nextdns.io/126ab2/nuc-deugniets-https4", "https://ipv6.dns.nextdns.io/126ab2/nuc-deugniets-https6"]
+-#nameservers = ["https://dns.nextdns.io/126ab2/nuc-deugniets-https"]
+-#nameservers = ["45.90.28.131", "45.90.30.131", "2a07:a8c0::12:6ab2", "2a07:a8c1::12:6ab2"]
+-#nameservers = ["tls://nuc-deugniets-126ab2.dns.nextdns.io"]
+-
+-# DNS Servers to forward to
+-#nameservers = ["1.1.1.1", "1.0.0.1", "8.8.8.8", "8.8.4.4", "9.9.9.10", "149.112.112.10"]
+-#nameservers = ["1.1.1.1", "8.8.8.8", "9.9.9.10", "1.0.0.1", "8.8.4.4", "149.112.112.10"]
+-#nameservers = ["1.1.1.1", "1.0.0.1"]
+-#nameservers = ["192.168.1.1", "2001:981:1759:1:eadf:70ff:fea0:94d3"]
+-#nameservers = ["127.0.0.1", "0::1"]
+-
+-# DNSFilter
+-#nameservers = ["103.247.36.36", "103.247.37.37"]
+-# XS4ALL
+-#nameservers = ["tls://resolver.xs4all.nl"]
+-#nameservers = ["194.109.6.66", "194.109.9.99", "194.109.104.104", "2001:888:0:6::66", "2001:888:0:9::99"]
+-# Cleanbrowsing AdultFilter
+-#nameservers = ["185.228.168.10", "185.228.169.11", "2a0d:2a00:1::1", "2a0d:2a00:2::1"]
+-# AdGuard Family
+-#nameservers = ["176.103.130.132", "176.103.130.134", "2a00:5a60::bad1:0ff", "2a00:5a60::bad2:0ff"]
+-# NextDNS.io Frutch
+-#nameservers = ["45.90.28.125", "45.90.30.125", "2a07:a8c0::65:fef9", "2a07:a8c1::65:fef9"]
+-# Cleanbrowsing
+-#nameservers = ["185.228.168.72", "185.228.169.72", "2a0d:2a00:1:abab:3629:2883:22d0:479b", "2a0d:2a00:2:abab:3629:2883:22d0:479b"]
+-# XS4ALL Safeservers
+-#safe_nameservers = ["194.109.6.66", "194.109.9.99", "194.109.104.104", "2001:888:0:6::66", "2001:888:0:9::99"]
+-smartip = true
+-
+-# Cache Settings
+-blacklist_cache_ttl = 86400
+-blacklist_ttl = 3600
+-rc_ttl = 120
+-rc_error_ttl = 30
+-min_ttl = 2400
+-max_ttl = 86400
+-spoof_ttl = 3600
+-
+-# CNAME Collapsing
+-collapse = true
+-
+-# Check IP-Hit via reverse-lookup for whitelist
+-check_iprev = true
+-
+-# Parent Hit
+-parent_hit = true
+-parent_cache_hit = true
+-
+-# Block IP Families
+-blockip4 = false
+-blockip6 = false
+-
+-# Block ANY RRType
+-blockany = true
+-
+-# Block root
+-blockroot = true
+-
+-# Logging
+-log_requests = true
+-log_responses = true
+-log_caching = true
+-log_hits = true
+-log_forwards = true
+-log_collapse = true
+-log_verbose = true
+-
+-# Returncodes
+-blacklist_rcode = "REFUSED"
+-tld_rcode = "NXDOMAIN"
+-redirect_ip = ["0.0.0.0", "::"]
+-
+-# Check TLDs
+-check_tld = false
+-#tld_url = "https://data.iana.org/TLD/tlds-alpha-by-domain.txt"
+-tld_url = "/opt/accomplist/chris/tld-iana.list"
+-
+-# Use DNSBL/WL !!! WIP !!!
+-use_dnsl = false
+-dnsbl = ["BLOCKLIST.DE:ip:de.bl.blocklist.de.", "SPAMHAUS-ZEN:ip:zen.spamhaus.org.", "SPAMHAUS-DBL:dom:dbl.spamhaus.org."]
+-#dnsbl = ["BLOCKLIST.DE:ip:de.bl.blocklist.de."]
+-
+-# Filtering
+-filtering = true
+-filter_request = true
+-filter_response = true
+-
+-# UnFiltering - Make sure the queries come from DNS clients and not from a relay/proxy!
+-unfilter = true
+-unfilter_ttl = 300
+-unfilter_whitelist = false
+-
+-# Fix rcodes
+-fix_noerror = false
+-fix_nxdomain = false
+-
+-# Minimal Responses
+-min_resp = false
+-
+-# White/Blacklists
+-# See: https://github.com/cbuijs/accomplist/tree/master/standard
+-optimize = false
+-#whitelist = ["/opt/deugniets/alias.list"]
+-
+-#whitelist = ["/opt/deugniets/alias.list", "/opt/accomplist/deugniets/plain.white.regex.list", "/opt/accomplist/deugniets/optimized.white.domain.list", "/opt/accomplist/deugniets/plain.white.ip4cidr.list", "/opt/accomplist/deugniets/plain.white.ip6cidr.list"]
+-#blacklist = ["/opt/accomplist/chris/regex.black", "/opt/accomplist/deugniets/plain.black.regex.list", "/opt/accomplist/deugniets/optimized.black.domain.list", "/opt/accomplist/deugniets/plain.black.ip4cidr.list", "/opt/accomplist/deugniets/plain.black.ip6cidr.list"]
+-
+-whitelist = ["/opt/deugniets/forwarders.list", "/opt/deugniets/alias.list", "/opt/deugniets/unfilter.list", "/opt/deugniets/doh.alias.list", "/opt/accomplist/chris/connectivity-check.list", "/opt/accomplist/deugniets/deugniets.white.list", "/opt/accomplist/chris/white.special", "/opt/accomplist/chris/private-addresses.list"]
+-blacklist = ["/opt/deugniets/black.list", "/opt/accomplist/deugniets/deugniets.black.list","/opt/accomplist/family-safe/deugniets.black.list", "/opt/accomplist/malicious-ip/deugniets.black.list"]
+-
+-
+diff --git a/deugniets.py b/deugniets.py
+index 291ff4e..7983090 100644
+--- a/deugniets.py
++++ b/deugniets.py
+@@ -1,7 +1,7 @@
+ #!/usr/bin/env python3
+ '''
+ =======================================================================
+- deugniets.py v2.590-20191125 Copyright 2019 by cbuijs@chrisbuijs.com
++ deugniets.py v2.59-20191125 Copyright 2019 by cbuijs@chrisbuijs.com
+ =======================================================================
+ 
+  Based on: https://github.com/supriyo-biswas/adblock-dns-server
+@@ -88,6 +88,9 @@ from hyper.contrib import HTTP20Adapter
+ # Stuff needed for ratelimit
+ #from ratelimit import limits, sleep_and_retry
+ 
++# AbuseIPDB
++
++
+ # Cache
+ # https://github.com/dnaeon/py-vconnector/blob/master/src/vconnector/cache.py
+ # https://www.reddit.com/r/Python/comments/2uik3q/expiring_inmemory_cache_module/
+diff --git a/requirements.txt b/requirements.txt
+index 814331d..757a649 100644
+--- a/requirements.txt
++++ b/requirements.txt
+@@ -4,6 +4,7 @@ dnspython>=2.0.0
+ hyper>=0.7.0
+ idna>=2.8
+ IPy>=1.0
++python-abuseipdb>=1.0.2         
+ python-hosts>=0.4.7         
+ pytricia>=1.0.0
+ regex>=2019.6.8

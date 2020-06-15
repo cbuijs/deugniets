@@ -1,0 +1,88 @@
+diff --git a/deugniets.py b/deugniets.py
+index facd8e2..43344d6 100644
+--- a/deugniets.py
++++ b/deugniets.py
+@@ -1149,50 +1149,46 @@ def dns_query(name, rdclass, rdtype, qid, cip, unfilter, fttl):
+ 
+     cachename = '{0}/IN/{1}'.format(qname, qrdtype)
+ 
+-    if is_ip4.search(cip) and (cip not in wl_ip4) and (cip in bl_ip4):
+-        logging.warning('ACL-BLACKLIST-HIT [{0}]: Client {1} -> {2}'.format(qid, cip, bl_ip4.get_key(cip)))
+-        return (dns.rcode.REFUSED, [], [], [])
+-
+-    if is_ip6.search(cip) and (cip not in wl_ip6) and (cip in bl_ip6):
+-        logging.warning('ACL-BLACKLIST-HIT [{0}]: Client {1} -> {2}'.format(qid, cip, bl_ip6.get_key(cip)))
+-        return (dns.rcode.REFUSED, [], [], [])
+-
+-    # !!!! BROKEN - FIX - LOOKSUP WL_IP AS WELL !!!!
+-    if config['abuseipdbkey'] and is_ip.search(cip) and (cip not in wl_ip4) and (cip not in wl_ip6):
+-          score = False
+-
+-          if cip.find(':') > 0 :
+-              abuse_ip = abuse_ip6
+-              bl_ip = bl_ip6
+-          else:
+-              abuse_ip = abuse_ip4
+-              bl_ip = bl_ip4
+-      
+-          if cip in abuse_ip:
+-              score = abuse_ip.get(cip)
++    if is_ip.search(cip):
++        if cip.find(':') > 0:
++            abuse_ip = abuse_ip6
++            wl_ip = wl_ip6
++            bl_ip = bl_ip6
++        else:
++            abuse_ip = abuse_ip4
++            wl_ip = wl_ip4
++            bl_ip = bl_ip4
++    
++        if (cip not in wl_ip) and (cip in bl_ip):
++            logging.warning('ACL-BLACKLIST-HIT [{0}]: Client {1} -> {2}'.format(qid, cip, bl_ip.get_key(cip)))
++            return (dns.rcode.REFUSED, [], [], [])
+ 
+-          else:
+-              ipcheck = False
++        # !!!! BROKEN - FIX - LOOKSUP WL_IP AS WELL !!!!
++        if config['abuseipdbkey'] and (cip not in wl_ip):
++            score = False
+ 
+-              try:
+-                  ipcheck = ipdb.check(cip)
++            if cip in abuse_ip:
++                score = abuse_ip.get(cip)
++            else:
++                ipcheck = False
+ 
+-              except BaseException as err:
+-                  logging.error('ABUSEIPDB-ERROR: {0} - {1}'.format(cip, err))
+-                  ipcheck = False
++                try:
++                    ipcheck = ipdb.check(cip)
+ 
+-              if ipcheck:
+-                  logging.info('ABUSEIPDB-CHECK: {0}'.format(cip))
+-                  score = ipcheck.abuseConfidenceScore
++                except BaseException as err:
++                    logging.error('ABUSEIPDB-ERROR: {0} - {1}'.format(cip, err))
++                    ipcheck = False
+ 
+-              abuse_ip[cip] = score
++                if ipcheck:
++                    logging.info('ABUSEIPDB-CHECK: {0} ({1} - {2})'.format(cip, ipcheck.isp, ipcheck.countryName))
++                    score = ipcheck.abuseConfidenceScore
+ 
+-          #logging.debug('ABUSEIPDB: {0} = {1}'.format(cip, score))
++            abuse_ip[cip] = score
+ 
+-          if score and score > 90:
+-              logging.warning('ABUSEIPDB-HIT [{0}]: Score for Client {1} = {2}'.format(qid, cip, score))
+-              bl_ip[cip] = True
+-              return (dns.rcode.REFUSED, [], [], [])
++            if score and score > 90:
++                logging.warning('ABUSEIPDB-HIT [{0}]: Score for Client {1} = {2}'.format(qid, cip, score))
++                bl_ip[cip] = True
++                return (dns.rcode.REFUSED, [], [], [])
+ 
+ 
+     if qrdtype == 'ANY' and config['blockany']:

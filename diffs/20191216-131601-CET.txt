@@ -1,0 +1,12 @@
+diff --git a/Dockerfile b/Dockerfile
+index d4f3149..d992c28 100644
+--- a/Dockerfile
++++ b/Dockerfile
+@@ -12,6 +12,7 @@ ADD cache.py /opt/deugniets/cache.py
+ ADD requirements.txt /opt/deugniets/requirements.txt
+ ADD deugniets.conf.docker /opt/deugniets/deugniets.conf
+ ADD local.list.docker /opt/deugniets/local.list
++ADD GeoLite2-City.mmdb /opt/deugniets/GeoLite2-City.mmdb
+ RUN pip3 install --upgrade pip
+ RUN pip3 install --upgrade chardet==3.0.4
+ RUN pip3 install --upgrade urllib3==1.25.7

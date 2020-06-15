@@ -1,0 +1,55 @@
+diff --git a/deugniets.py b/deugniets.py
+index a219884..eff8d43 100644
+--- a/deugniets.py
++++ b/deugniets.py
+@@ -1,7 +1,7 @@
+ #!/usr/bin/env python3
+ '''
+ ===========================================================================
+- deugniets.py v3.19-20200611 Copyright 2019-2020 by cbuijs@chrisbuijs.com
++ deugniets.py v3.191-20200611 Copyright 2019-2020 by cbuijs@chrisbuijs.com
+ ===========================================================================
+ 
+  Based on: https://github.com/supriyo-biswas/adblock-dns-server
+@@ -467,8 +467,8 @@ def read_list(filenames, listname, domlst, ip4lst, ip6lst, rxlst, unlst, unip4,
+         ftype = False
+         if filename.find(':') > -1:
+             ft = filename.split(':')[0].upper()
+-            if ft in ('IP', 'DOM', 'DOMWORD', 'GEO', 'ALIAS', 'FORWARD', 'TTL', 'UNFILTER', 'RX'):
+-                filename = filename.split(':')[1]
++            if ft in ('IP', 'IP4', 'IP6','DOM', 'DOMWORD', 'GEO', 'ALIAS', 'FORWARD', 'TTL', 'UNFILTER', 'RX'):
++                filename = ':'.join(filename.split(':')[1:])
+                 ftype = ft
+                 logging.info('PROCESS-LIST ({0}): {1}-LIST ...'.format(filename, ftype))
+         else:
+@@ -495,14 +495,16 @@ def read_list(filenames, listname, domlst, ip4lst, ip6lst, rxlst, unlst, unip4,
+ 
+             oldtotal = len(domlst) + len(ip4lst) + len(ip6lst) + len(rxlst) + len(unlst) + len(unip4) + len(unip6) + len(geolst) + len(alst) + len(flst)
+             
+-            if ftype is False or ftype == 'IP':
++            if ftype is False or ftype in ('IP', 'IP4', 'IP6'):
+                 before = len(ip4lst) + len(ip6lst)
+                 logging.info('PROCESS-LIST ({0}): Getting IPs...'.format(lname))
+-                for entry in list(filter(None, filter(is_ip4.search, cleanlines))):
+-                    ip4lst[entry] = entry
++                if ftype in ('IP', 'IP4'):
++                    for entry in list(filter(None, filter(is_ip4.search, cleanlines))):
++                        ip4lst[entry] = entry
+ 
+-                for entry in list(filter(None, filter(is_ip6.search, cleanlines))):
+-                    ip6lst[addzero(entry)] = entry
++                if ftype in ('IP', 'IP6'):
++                    for entry in list(filter(None, filter(is_ip6.search, cleanlines))):
++                        ip6lst[addzero(entry)] = entry
+ 
+                 logging.info('PROCESS-LIST ({0}): Fetched {1} IPs'.format(lname, (len(ip4lst) + len(ip6lst)) - before))
+ 
+@@ -665,7 +667,7 @@ def addzero(entry):
+ 
+ def get_lines(filename, listname):
+     '''Get all lines from file or URL'''
+-    #logging.info('GET-LINES: {0} - {1}'.format(filename, listname))
++    logging.info('GET-LINES: {0} - {1}'.format(filename, listname))
+     lines = False
+ 
+     if filename.startswith('http://') or filename.startswith('https://'):

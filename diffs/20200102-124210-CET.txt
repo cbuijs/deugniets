@@ -1,0 +1,30 @@
+diff --git a/deugniets.py b/deugniets.py
+index f0b0c79..632f39e 100644
+--- a/deugniets.py
++++ b/deugniets.py
+@@ -1,7 +1,7 @@
+ #!/usr/bin/env python3
+ '''
+ ===========================================================================
+- deugniets.py v2.65-20200102 Copyright 2019-2020 by cbuijs@chrisbuijs.com
++ deugniets.py v2.651-20200102 Copyright 2019-2020 by cbuijs@chrisbuijs.com
+ ===========================================================================
+ 
+  Based on: https://github.com/supriyo-biswas/adblock-dns-server
+@@ -21,13 +21,14 @@
+  - Ability to disable resolution of aliases/spoofs
+  - Filter out CNAME's with no resulting address(es)A
+  - Alias based on regex
+- - Ellaborate GEO to have combinations of City/Area/Country/Continent
++ - Ellaborate GeoIP to have combinations of City/Area/Country/Continent
+  - Listen on DoT (853) and DoH (443) - SSL/Certificate config
+- - Check/Investigate/Use Twisted names framework
++ - Check/Investigate/Use Twisted names framework - Backburner
+ 
+ Done:
+ 
+  - NextDNS supported out of the box
++ - GeoIP
+ 
+ ===========================================================================
+ '''

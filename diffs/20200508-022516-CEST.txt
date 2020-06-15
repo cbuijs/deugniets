@@ -1,0 +1,322 @@
+diff --git a/deugniets.py b/deugniets.py
+index 063fa88..0c6b79b 100644
+--- a/deugniets.py
++++ b/deugniets.py
+@@ -1,7 +1,7 @@
+ #!/usr/bin/env python3
+ '''
+ ===========================================================================
+- deugniets.py v3.00-20200507 Copyright 2019-2020 by cbuijs@chrisbuijs.com
++ deugniets.py v3.01-20200507 Copyright 2019-2020 by cbuijs@chrisbuijs.com
+ ===========================================================================
+ 
+  Based on: https://github.com/supriyo-biswas/adblock-dns-server
+@@ -17,6 +17,8 @@
+  - Finish TRIE rework of domain-based dict's
+    - Finish UNFILTER one, mix of ip/dom
+    - Do geo_cache (remove cachetools)
++ - Rewrite/Re-Add stats.command
++   Add functions to cache to get all entries without increasing hit count
+  - Refurbish whole stack of listeners, multi-threading etc
+    - Fix listening/response IP when responding (same IP out as in), IPv6
+    - Fix TCP listeners
+@@ -107,7 +109,7 @@ from cache import CachedObject, CacheInventory
+ 
+ # Initialize caches
+ cache = CacheInventory(maxsize=65535, housekeeping=60, name='DNS-Cache', cachelog=True)
+-unfilter_cache = CacheInventory(maxsize=512, housekeeping=60, name='UnFilter', cachelog=True)
++unfilter_cache = CacheInventory(maxsize=512, housekeeping=60, name='UnFilter', cachelog=False)
+ 
+ geo_cache = LRUCache(maxsize=8192)
+ 
+@@ -917,11 +919,12 @@ def is_blacklisted(qname, value, valuetype, checkip):
+ 
+     testvalue = str(value)
+     if not checkip:
+-        testvalue = regex.split('\s+', str(value))[-1].lower() # Get last value
++        testvalue = regex.split('\s+', str(value))[-1].lower() # Get last value/parameter
+ 
+     rvalue = testvalue[::-1]
+ 
+     result = None
++    blocktype = None
+     hitdata = None
+     fromcache = False
+     parent_result = None
+@@ -930,12 +933,12 @@ def is_blacklisted(qname, value, valuetype, checkip):
+     if rvalue in check_cache_trie:
+         fromcache = True
+         #result, hitdata = check_cache.get(value)
+-        result, hitdata = check_cache_trie.get(rvalue, (None, None))
++        result, blocktype, hitdata = check_cache_trie.get(rvalue, (None, None))
+ 
+     elif not checkip:
+         parent = check_cache_trie.longest_prefix(rvalue).key or None
+         if parent:
+-            parent_result, parent_hitdata = check_cache_trie.get(parent, (None, None))
++            parent_result, parent_blocktype, parent_hitdata = check_cache_trie.get(parent, (None, None))
+             if parent_result is True:
+                 if config['smartdoms'] and rvalue in bl_dom_trie:
+                     logging.info('{0}-CHECK-RESULT [WHITELISTED/BLACKLISTED]: \"{1}\" -> \"{2}\" / \"{1}\"'.format(valuetype, testvalue, parent[::-1]))
+@@ -943,6 +946,7 @@ def is_blacklisted(qname, value, valuetype, checkip):
+ 
+                 if parent_result is True:
+                     result = parent_result
++                    blocktype = parent_blocktype
+                     hitdata = parent[::-1]
+ 
+ 
+@@ -959,9 +963,9 @@ def is_blacklisted(qname, value, valuetype, checkip):
+ 
+         beingchecked.add(testvalue)
+ 
+-        result, hitdata = check_blacklisted(qname, testvalue, valuetype, checkip)
++        result, blocktype, hitdata = check_blacklisted(qname, testvalue, valuetype, checkip)
+ 
+-        check_cache_trie[value[::-1]] = result, hitdata
++        check_cache_trie[value[::-1]] = result, blocktype, hitdata
+ 
+         prune = int(time.time()) % 60
+         while prune in (0, 30) and len(check_cache_trie) > check_cache_size:
+@@ -979,10 +983,15 @@ def is_blacklisted(qname, value, valuetype, checkip):
+     if config['log_hits'] and result is not None:
+         checklog = '\"{0}\"'.format(testvalue)
+         if testvalue != hitdata:
+-            checklog = '{0} -> \"{1}\"'.format(checklog, hitdata)
++            checklog = '{0} -> {1}:\"{2}\"'.format(checklog, blocktype, hitdata)
+ 
+         if qname not in (testvalue, hitdata):
+             checklog = '\"{0}\" -> {1}'.format(qname, checklog)
++       
++        if checkip:
++            geodata = geo(testvalue)
++            if hitdata != geodata:
++                checklog = '{0} ({1})'.format(checklog, geodata)
+ 
+         state = blacklisted_state.get(result, 'NOT-LISTED')
+ 
+@@ -991,7 +1000,7 @@ def is_blacklisted(qname, value, valuetype, checkip):
+ 
+         if parent_result is not None:
+             state = 'PARENT-{0}'.format(state)
+-
++     
+         logging.info('{0}-CHECK-RESULT [{1}]: {2}'.format(valuetype, state, checklog))
+ 
+     return result, hitdata
+@@ -1004,11 +1013,11 @@ def check_blacklisted(qname, testvalue, valuetype, checkip):
+     if config['blockip4'] and ((checkip is False and ip4arpa.search(testvalue)) or (checkip is True and is_ip4.search(testvalue))):
+         if config['log_hits'] and config['log_verbose']:
+             logging.warning('{0}-IPV4-HIT: \"{1}\" -> {2}'.format(valuetype, qname, testvalue))
+-        return True, testvalue
++        return True, 'BLOCK-IPV4', testvalue
+     elif config['blockip6'] and ((checkip is False and ip6arpa.search(testvalue)) or (checkip is True and is_ip6.search(testvalue))):
+         if config['log_hits'] and config['log_verbose']:
+              logging.warning('{0}-IPV6-HIT: \"{1}\" -> {2}'.format(valuetype, qname, testvalue))
+-        return True, testvalue
++        return True, 'BLOCK-IPV6', testvalue
+ 
+     # Check against domain
+     if checkip is False and is_dom.search(testvalue):
+@@ -1023,19 +1032,19 @@ def check_blacklisted(qname, testvalue, valuetype, checkip):
+                         logging.warning('{0}-SPECIFIC-NAME-DOM-HIT [BLACKLIST]: \"{1}\" -> \"{2}\" (Parent \"{3}\" is WHITELISTED)'.format(valuetype, qname, testvalue, wcheck))
+                    else:
+                        logging.warning('{0}-SPECIFIC-NAME-DOM-HIT [BLACKLIST]: \"{1}\" (Parent \"{2}\" is WHITELISTED)'.format(valuetype, testvalue, wcheck))
+-                return True, wcheck
++                return True, 'WHITE-DOM', wcheck
+ 
+             #if config['smartdoms'] and check_dom_smart('WHITELIST', testvalue, bl_dom, 'BLACKLIST', True):
+             if config['smartdoms']:
+                 #bcheck = check_dom_smart_trie('WHITELIST', testvalue, bl_dom_trie, 'BLACKLIST', True, wcheck)
+                 bcheck = check_dom_smart_trie('WHITELIST', testvalue, bl_dom_trie, 'BLACKLIST', True, False)
+                 if bcheck:
+-                    return True, bcheck
+-            return False, wcheck
++                    return True, 'BLACK-DOM', bcheck
++            return False, 'WHITE-DOM', wcheck
+ 
+         rcheck = check_rx(valuetype, orgtestvalue, wl_rx, wl_big_rx, 'WHITELIST')
+         if rcheck:
+-            return False, rcheck
++            return False, 'WHITE-RX', rcheck
+ 
+         #if config['check_ratio']:
+         #    if check_ratio(valuetype, testvalue, wl_dom, 'WHITELIST'):
+@@ -1045,7 +1054,7 @@ def check_blacklisted(qname, testvalue, valuetype, checkip):
+             if not tld_rx.search(testvalue): # Invalid TLD
+                 if config['log_hits'] and config['log_verbose']:
+                     logging.warning('{0}-NXTLD-HIT: {1}'.format(valuetype, testvalue))
+-                return True, 'NXTLD'
++                return True, 'NXTLD', '.{0}'.format(testvalue.strip('.').split('.')[-1])
+ 
+         #if check_dom(valuetype, testvalue, bl_dom, 'BLACKLIST', False, config['smartdoms']): # Blacklisted
+         bcheck = check_dom_trie(valuetype, testvalue, bl_dom_trie, 'BLACKLIST', False, config['smartdoms']) # Blacklisted
+@@ -1054,12 +1063,12 @@ def check_blacklisted(qname, testvalue, valuetype, checkip):
+             if config['smartdoms']:
+                 acheck = check_dom_trie('BLACKLIST', testvalue, alias_trie, 'ALIAS', False, False)
+                 if acheck:
+-                    return False, acheck
+-            return True, bcheck
++                    return False, 'ALIAS-DOM', acheck
++            return True, 'BLACK-DOM', bcheck
+ 
+         rcheck = check_rx(valuetype, orgtestvalue, bl_rx, bl_big_rx, 'BLACKLIST')
+         if rcheck:
+-            return True, rcheck
++            return True, 'BLACK-RX', rcheck
+ 
+         #if config['check_ratio']:
+         #    if check_ratio(valuetype, testvalue, bl_dom, 'BLACKLIST'):
+@@ -1088,7 +1097,7 @@ def check_blacklisted(qname, testvalue, valuetype, checkip):
+             # Check if IPv4 is whitelisted
+             ipcheck = check_ip(qname, valuetype, testvalue, orgtestvalue, wl_ip4, 'WHITELIST')
+             if ipcheck:
+-                return False, ipcheck
++                return False, 'BLACK-IPV4', ipcheck
+ 
+             else:
+                 # Check if IPv4 is blacklisted
+@@ -1097,9 +1106,9 @@ def check_blacklisted(qname, testvalue, valuetype, checkip):
+                     #if rev_check(testvalue, wl_dom, 'WHITELIST'):
+                     rcheck = rev_check_trie(testvalue, wl_dom_trie, 'WHITELIST')
+                     if rcheck:
+-                        return False, rcheck
++                        return False, 'WHITE-REV-DOM', rcheck
+                     else:
+-                        return True, ipcheck
++                        return True, 'WHITE-IPV4', ipcheck
+ 
+ 
+         # Check against IP6
+@@ -1108,7 +1117,7 @@ def check_blacklisted(qname, testvalue, valuetype, checkip):
+             # Check if IPv6 is whitelisted
+             ipcheck = check_ip(qname, valuetype, testvalue, orgtestvalue, wl_ip6, 'WHITELIST')
+             if ipcheck:
+-                return False, ipcheck
++                return False, 'BLACK-IPV6', ipcheck
+ 
+             else:
+                 # Check if IPv6 is blacklisted
+@@ -1117,31 +1126,31 @@ def check_blacklisted(qname, testvalue, valuetype, checkip):
+                     #if rev_check(testvalue, wl_dom, 'WHITELIST'):
+                     rcheck = rev_check_trie(testvalue, wl_dom_trie, 'WHITELIST')
+                     if rcheck:
+-                        return False, rcheck
++                        return False, 'WHITE-REV-DOM', rcheck
+                     else:
+-                        return True, ipcheck
++                        return True, 'BLACK-IPV6', ipcheck
+ 
+         # Check against GEO
+         gcheck = check_geo(qname, valuetype, testvalue, wl_geo, 'WHITELIST')
+         if gcheck:
+-            return False, gcheck
++            return False, 'WHITE-GEO', gcheck
+ 
+         gcheck = check_geo(qname, valuetype, testvalue, bl_geo, 'BLACKLIST')
+         if gcheck:
+-            return True, gcheck
++            return True, 'BLACK-GEO', gcheck
+   
+     # Check against DNSWL/BL
+     if dnsl_check(config['dnswl'], orgtestvalue, checkip):
+         if config['log_hits']:
+             logging.warning('{0}-WHITELIST-DNSL-HIT: \"{1}\"'.format(valuetype, testvalue))
+-        return False, orgtestvalue
++        return False, 'WHITE-DNSL', orgtestvalue
+ 
+     if dnsl_check(config['dnsbl'], orgtestvalue, checkip):
+         if config['log_hits']:
+             logging.warning('{0}-BLACKLIST-DNSL-HIT: \"{1}\"'.format(valuetype, testvalue))
+-        return True, orgtestvalue
++        return True, 'BLACK-DNSL', orgtestvalue
+ 
+-    return None, None
++    return None, None, None
+ 
+ 
+ def check_rx(valuetype, testvalue, rxlst, rxbiglst, tag):
+@@ -1655,7 +1664,8 @@ def dns_query(name, rdclass, rdtype, qid, cip, unfilter, fttl):
+         unfilter = True
+ 
+     if unfilter:
+-        cachename = '{0}/{1}'.format(cachename, cip)
++        #cachename = '{0}/{1}'.format(cachename, cip)
++        cachename = '{0}/UNFILTER'.format(cachename)
+         if ip6 is None:
+             logging.info('INTERNAL-{0}-UNFILTER: {1}'.format(cip, cachename))
+ 
+@@ -2115,9 +2125,11 @@ def dns_query(name, rdclass, rdtype, qid, cip, unfilter, fttl):
+ 
+         # TTL
+         ttl = False
+-        if rv[2]:
+-            ttl = rv[2][-1].ttl
+ 
++        # Get SOA TTL if avaible
++        ttl = get_soa_ttl(rv[2])
++
++        # Determine TTL
+         if blacklistname:
+             ttl = config['blacklist_ttl']
+ 
+@@ -2130,8 +2142,9 @@ def dns_query(name, rdclass, rdtype, qid, cip, unfilter, fttl):
+         else:
+             if rv[1]: # Get ttl from answer section
+                 ttl = rv[1][-1].ttl
+-            elif ttl: # Get TTL from auth section
++            elif ttl:
+                 logging.info('AUTH-TTL [{0}]: {1} = {2}'.format(qid, cachename, ttl))
++                ttl = norm_ttl(qid, qname, ttl, config['rc_ttl'], config['max_ttl'])
+             else:
+                 ttl = config['min_ttl']
+ 
+@@ -2168,11 +2181,7 @@ def dns_query(name, rdclass, rdtype, qid, cip, unfilter, fttl):
+ 
+             # All TTLs the same
+             if rcode == dns.rcode.NOERROR and returnstatus.find('BLACKLISTED') < 0:
+-                orgttl = ttl
+-                ttl = max(config['min_ttl'], ttl)
+-                ttl = min(ttl, config['max_ttl'])
+-                if ttl != orgttl:
+-                    logging.info('TTL [{0}]: Forced from {1} to {2} for {3}'.format(qid, orgttl, ttl, qname))
++                ttl = norm_ttl(qid, qname, ttl, config['min_ttl'], config['max_ttl'])
+ 
+             rv = update_ttls(qid, qname, rv, ttl)
+ 
+@@ -2199,6 +2208,24 @@ def countrv(rv):
+     return 0
+ 
+ 
++def get_soa_ttl(rv):
++    if rv:
++        for rr in rv:
++            if rr.rdtype == 6:
++                return rr.ttl or False
++
++    return False
++
++
++def norm_ttl(qid, qname, ttl, minttl, maxttl):
++    orgttl = ttl
++    ttl = max(minttl, ttl)
++    ttl = min(ttl, maxttl)
++    if ttl != orgttl:
++        logging.info('TTL [{0}]: Forced from {1} to {2} for {3}'.format(qid, orgttl, ttl, qname))
++    return ttl
++
++
+ def update_ttls(qid, qname, result, ttl):
+     for rrset in result[1]:
+         rrset.ttl = ttl
+@@ -2472,8 +2499,8 @@ def log_helper(qname, qrdtype, result, tag, qid, cip):
+     ttl = 0
+     if result[1]:
+         ttl = result[1][-1].ttl
+-    elif result[2]:
+-        ttl = result[2][-1].ttl
++    else:
++        ttl = get_soa_ttl(result[2]) or 0
+  
+     #rlog = '{0} [{1}]: {2}/IN/{3} {4} = {5} (ANS: {6}, AUT: {7}, ADD: {8} RRs)'.format(tag, qid, qname, qrdtype, ttl, rcode, len(result[1]), len(result[2]), len(result[3]))
+     rlog = '{0} [{1}]: {2}/IN/{3} {4} = {5} ({6} RRs)'.format(tag, qid, qname, qrdtype, ttl, rcode, countrv(result))

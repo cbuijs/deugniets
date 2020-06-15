@@ -1,0 +1,184 @@
+diff --git a/deugniets.py b/deugniets.py
+index 34932fe..3edd0eb 100644
+--- a/deugniets.py
++++ b/deugniets.py
+@@ -1,7 +1,7 @@
+ #!/usr/bin/env python3
+ '''
+ ===========================================================================
+- deugniets.py v2.665-20200103 Copyright 2019-2020 by cbuijs@chrisbuijs.com
++ deugniets.py v2.667-20200105 Copyright 2019-2020 by cbuijs@chrisbuijs.com
+ ===========================================================================
+ 
+  Based on: https://github.com/supriyo-biswas/adblock-dns-server
+@@ -199,15 +199,15 @@ is_geo = regex.compile('^@[a-z/\s]+$', regex.I)
+ #####################################################################
+ 
+ # Replace socket.getaddrinfo with caching version to speedup requests/urllib/abuseipdb
+-def _getaddrinfo(host, port=53, family=0, typ=0, proto=0, flags=0):
++def _getaddrinfo(host, port=53, family=0, type=0, proto=0, flags=0):
+     cachename = '{0}/{1}/GETADDRINFO'.format(host, port)
+-    #logging.debug('GETADDRINFO: {0} {1} {2} {3} {4} {5}'.format(host, port, family, typ, proto, flags))
++    #logging.debug('GETADDRINFO: {0} {1} {2} {3} {4} {5}'.format(host, port, family, type, proto, flags))
+     result = cache.get(cachename)
+     tag = 'CACHE-HIT'
+     if result is None:
+         tag = 'CACHED'
+         try:
+-            result = _socket.getaddrinfo(host, port, family, typ, proto, flags)
++            result = _socket.getaddrinfo(host, port, family, type, proto, flags)
+         except BaseException as err:
+             logging.error('GETADDRINFO-ERROR: {0} - {1}'.format(host, err))
+ 
+@@ -279,7 +279,7 @@ def undom(domlist1, domlist2, listname, onlysub):
+             if match is False:
+                 newdomlist[dom] = domlist1[dom]
+             else:
+-                logging.debug('UNDOM [{0}]: Removed {1} from {2}, matches {3} {4}'.format(listname, dom, name1, name2, match))
++                logging.info('UNDOM [{0}]: Removed {1} from {2}, matches {3} {4}'.format(listname, dom, name1, name2, match))
+ 
+         aftercount = len(newdomlist)
+         logging.info('UNDOM [{0}]: Went from {1} to {2} entries ({3})'.format(listname, beforecount, aftercount, aftercount - beforecount))
+@@ -350,7 +350,7 @@ def unip(iplist1, iplist2, ip6, listname, allowsame):
+             if match is False:
+                 newiplist[ip] = iplist1[ip]
+             else:
+-                logging.debug('UNIP-{0} [{1}]: Removed {2} {3} matches {4} {5}'.format(fam, listname, ip, name1, match, name2))
++                logging.info('UNIP-{0} [{1}]: Removed {2} {3} matches {4} {5}'.format(fam, listname, ip, name1, match, name2))
+ 
+         aftercount = len(newiplist)
+         logging.info('UNIP-{0} [{1}]: Went from {2} to {3} entries ({4})'.format(fam, listname, beforecount, aftercount, aftercount - beforecount))
+@@ -361,7 +361,7 @@ def unip(iplist1, iplist2, ip6, listname, allowsame):
+         
+ # Aggregate IP list
+ def agg_ip(iplist, listname, fam):
+-    logging.info('AGGREGATE-{0}-[{1}]: Aggregating List ...'.format(fam, listname))
++    logging.info('AGGREGATE-{0} [{1}]: Aggregating List ...'.format(fam, listname))
+ 
+     if fam == 'IPV4':
+         new = pytricia.PyTricia(32, socket.AF_INET)
+@@ -371,11 +371,11 @@ def agg_ip(iplist, listname, fam):
+     for ip in list(map(str, netaddr.cidr_merge(list(iplist)))):
+         new[ip] = True
+         if ip not in iplist:
+-            logging.info('AGGREGATE-{0}-[{1}]: Removed {2} due to summarization'.format(fam, listname, ip))
++            logging.info('AGGREGATE-{0} [{1}]: Removed {2} due to summarization'.format(fam, listname, ip))
+            
+     beforecount = len(iplist)
+     aftercount = len(new)
+-    logging.info('AGGREGATE-{0}-[{1}]: Went from {2} to {3} entries ({4})'.format(fam, listname, beforecount, aftercount, aftercount - beforecount))
++    logging.info('AGGREGATE-{0} [{1}]: Went from {2} to {3} entries ({4})'.format(fam, listname, beforecount, aftercount, aftercount - beforecount))
+ 
+     return new
+ 
+@@ -504,7 +504,7 @@ def read_list(filenames, listname, domlst, ip4lst, ip6lst, rxlst, unlst, unip4,
+                         else:
+                             logging.warning('LIST ({0}) [#{1}]: Invalid UnFilter Syntax: \"{2}\"'.format(lname, count, line))
+ 
+-                    elif (not is_ip.search(entry)) and (not is_dom.search(entry)): # and (not is_aft.search(entry)):
++                    elif (config['use_regex']) and (len(entry)>2) and (not is_ip.search(entry)) and (not is_dom.search(entry)): # and (not is_aft.search(entry)):
+                         if entry.startswith('/') and entry.endswith('/'):
+                             entry = entry.strip('/')
+ 
+@@ -974,12 +974,13 @@ def check_if_blacklisted(testvalue, valuetype, checkip):
+ 
+ def check_rx(valuetype, testvalue, rxlst, tag):
+     '''Match value against regex'''
+-    for rx in rxlst:
+-        match = rxlst[rx].search(testvalue.rstrip('.'))
+-        if match:
+-            if config['log_hits']:
+-                logging.warning('{0}-{1}-RX-HIT: \"{2}\" matches \"{3}\"'.format(valuetype, tag, testvalue, rx))
+-            return True
++    if config['use_regex']:
++        for rx in rxlst:
++            match = rxlst[rx].search(testvalue.rstrip('.'))
++            if match:
++                if config['log_hits']:
++                    logging.warning('{0}-{1}-RX-HIT: \"{2}\" matches \"{3}\"'.format(valuetype, tag, testvalue, rx))
++                return True
+ 
+     return False
+ 
+@@ -1890,6 +1891,9 @@ def dox_request(qid, qname, rdtype, cachename, urls, rfc8484, cip):
+                     if config['log_forwards']:
+                         logging.info('DOH-QUERY [#{0}]: Query for {1}/IN/{2} to {3}'.format(retries, qname, dns.rdatatype.to_text(rdtype), url))
+ 
++                    if config['nextdns_id']:
++                        url += '/{0}-{1}'.format(regex.sub('\s+', '%20', config['nextdns_id']), regex.sub('[\.\:]+', '-', cip))
++
+                     response = False
+                     try:
+                         response = dns.query.https(message, url)
+@@ -2421,8 +2425,8 @@ def run_server():
+                     if config['nextdns_config']:
+                         dnsurl += '/{0}'.format(config['nextdns_config'])
+ 
+-                        if config['nextdns_id']:
+-                            dnsurl += '/{0}'.format(regex.sub('\s+', '%20', config['nextdns_id']))
++                        #if config['nextdns_id']:
++                        #    dnsurl += '/{0}'.format(regex.sub('\s+', '%20', config['nextdns_id']))
+ 
+                     newnameservers.append(dnsurl)
+ 
+@@ -2462,7 +2466,7 @@ def run_server():
+         for dnsserver in config['nameservers']:
+             if dnsserver.startswith('tls://') and dnsserver.find('#') == -1:
+                 hostname = dnsserver.split('/')[2]
+-                ips = list((map(lambda x: x[4][0], socket.getaddrinfo('{0}.'.format(hostname.rstrip('.')), 853, type=socket.SOCK_STREAM))))
++                ips = list((map(lambda x: x[4][0], socket.getaddrinfo('{0}.'.format(hostname.rstrip('.')), 853, typ=socket.SOCK_STREAM))))
+                 logging.info('TLS-SERVER: {0} ({1})'.format(hostname, ', '.join(ips)))
+                 for ip in ips:
+                     newentry = 'tls://{0}#{1}'.format(hostname, ip)
+@@ -2610,6 +2614,7 @@ if __name__ == '__main__':
+     config['filtering'] = True
+     config['filter_request'] = True
+     config['filter_response'] = True
++    config['use_regex'] = True
+ 
+     # Smart domains (walk domains)
+     config['smartdoms'] = True
+@@ -2732,8 +2737,8 @@ if __name__ == '__main__':
+             bl_dom = undom(bl_dom, wl_dom, 'BLACKLIST-WHITELIST', False)
+ 
+             ul_dom = undom(ul_dom, ul_dom, 'UNFILTER-UNFILTER', True)
+-            ul_ip4 = unip(ul_ip4, ul_ip4, False, 'IPV4-UNFILTER-UNFILTER', True)
+-            ul_ip6 = unip(ul_ip6, ul_ip6, True, 'IPV6-UNFILTER-UNFILTER', True)
++            ul_ip4 = unip(ul_ip4, ul_ip4, False, 'UNFILTER-UNFILTER', True)
++            ul_ip6 = unip(ul_ip6, ul_ip6, True, 'UNFILTER-UNFILTER', True)
+ 
+             wl_dom = undom(wl_dom, ul_dom, 'WHITELIST-UNFILTER', True)
+             bl_dom = undom(bl_dom, ul_dom, 'BLACKLIST-UNFILTER', True)
+@@ -2742,13 +2747,13 @@ if __name__ == '__main__':
+             bl_dom = unreg(bl_dom, bl_big_rx, 'BLACKLIST-BLACKLIST')
+             bl_dom = unreg(bl_dom, wl_big_rx, 'BLACKLIST-WHITELIST')
+ 
+-            wl_ip4 = unip(wl_ip4, wl_ip4, False, 'IPV4-WHITELIST-WHITELIST', True)
+-            bl_ip4 = unip(bl_ip4, bl_ip4, False, 'IPV4-BLACKLIST-BLACKLIST', True)
+-            bl_ip4 = unip(bl_ip4, wl_ip4, False, 'IPV4-BLACKLIST-WHITELIST', False)
++            wl_ip4 = unip(wl_ip4, wl_ip4, False, 'WHITELIST-WHITELIST', True)
++            bl_ip4 = unip(bl_ip4, bl_ip4, False, 'BLACKLIST-BLACKLIST', True)
++            bl_ip4 = unip(bl_ip4, wl_ip4, False, 'BLACKLIST-WHITELIST', False)
+ 
+-            wl_ip6 = unip(wl_ip6, wl_ip6, True, 'IPV6-WHITELIST-WHITELIST', True)
+-            bl_ip6 = unip(bl_ip6, bl_ip6, True, 'IPV6-BLACKLIST-BLACKLIST', True)
+-            bl_ip6 = unip(bl_ip6, wl_ip6, True, 'IPV6-BLACKLIST-WHITELIST', False)
++            wl_ip6 = unip(wl_ip6, wl_ip6, True, 'WHITELIST-WHITELIST', True)
++            bl_ip6 = unip(bl_ip6, bl_ip6, True, 'BLACKLIST-BLACKLIST', True)
++            bl_ip6 = unip(bl_ip6, wl_ip6, True, 'BLACKLIST-WHITELIST', False)
+ 
+ 
+         if len(wl_dom) + len(wl_ip4) + len(wl_ip6) + len(wl_rx) + len(bl_dom) + len(bl_ip4) + len(bl_ip6) + len(bl_rx) == 0:
+diff --git a/doh.alias.list b/doh.alias.list
+index a34febe..6ae8b31 100644
+--- a/doh.alias.list
++++ b/doh.alias.list
+@@ -42,7 +42,7 @@ doh.libredns.gr = 192.168.1.32, 2001:981:1759:1::32
+ dot.libredns.gr = 192.168.1.32, 2001:981:1759:1::32
+ doh.netweaver.uk = 192.168.1.32, 2001:981:1759:1::32
+ dns.neutopia.org = 192.168.1.32, 2001:981:1759:1::32
+-dns.nextdns.io = 192.168.1.32, 2001:981:1759:1::32
++#dns.nextdns.io = 192.168.1.32, 2001:981:1759:1::32
+ odvr.nic.cz = 192.168.1.32, 2001:981:1759:1::32
+ one.one.one.one = 192.168.1.32, 2001:981:1759:1::32
+ doh.powerdns.org = 192.168.1.32, 2001:981:1759:1::32

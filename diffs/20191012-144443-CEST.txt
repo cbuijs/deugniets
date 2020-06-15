@@ -1,0 +1,13 @@
+diff --git a/deugniets.conf b/deugniets.conf
+index bd6e7d2..8dd1ede 100644
+--- a/deugniets.conf
++++ b/deugniets.conf
+@@ -89,7 +89,7 @@ check_tld = false
+ tld_url = "/opt/accomplist/chris/tld-iana.list"
+ 
+ # Use DNSBL/WL !!! WIP !!!
+-use_dnsl = false
++use_dnsl = true
+ dnsbl = ["BLOCKLIST.DE:ip:de.bl.blocklist.de.", "SPAMHAUS-ZEN:ip:zen.spamhaus.org.", "SPAMHAUS-DBL:dom:dbl.spamhaus.org."]
+ #dnsbl = ["BLOCKLIST.DE:ip:de.bl.blocklist.de."]
+ 

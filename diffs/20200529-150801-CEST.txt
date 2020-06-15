@@ -1,0 +1,317 @@
+diff --git a/deugniets.py b/deugniets.py
+index da858b9..5a7fc22 100644
+--- a/deugniets.py
++++ b/deugniets.py
+@@ -1,7 +1,7 @@
+ #!/usr/bin/env python3
+ '''
+ ===========================================================================
+- deugniets.py v3.12-20200527 Copyright 2019-2020 by cbuijs@chrisbuijs.com
++ deugniets.py v3.13-20200529 Copyright 2019-2020 by cbuijs@chrisbuijs.com
+ ===========================================================================
+ 
+  Based on: https://github.com/supriyo-biswas/adblock-dns-server
+@@ -15,12 +15,12 @@
+ 
+  ToDo:
+  - Work on geosteer (Geo based answers/ordering)
++   - Seems to be okay as is
+  - Work on roundrobin (rrrr) seems to be random
++   - Broken
+  - Finish TRIE rework of domain-based dict's
+    - Finish UNFILTER (+ cache) one, mix of ip/dom
+    - Do geo_cache (remove cachetools)
+- - Rewrite/Re-Add stats.command
+-   Add functions to cache to get all entries without increasing hit count
+  - Refurbish whole stack of listeners, multi-threading etc
+    - Fix listening/response IP when responding (same IP out as in), IPv6
+    - Fix TCP listeners
+@@ -100,6 +100,7 @@ import pygtrie
+ 
+ # Stuff needed for DoH
+ import base64
++#from hyper.contrib import HTTP20Adapter
+ 
+ # GeoIP
+ import geoip2.database
+@@ -219,6 +220,7 @@ is_regex = regex.compile('^/.*/$', regex.I)
+ # Replace socket.getaddrinfo with caching version to speedup requests/urllib/abuseipdb
+ def _getaddrinfo(host, port=53, family=0, type=0, proto=0, flags=0):
+     #logging.debug('GETADDRINFO: {0} {1} {2} {3} {4} {5}'.format(host, port, family, type, proto, flags))
++
+     cachename = '{0}/{1}/GETADDRINFO'.format(host, port)
+ 
+     count = 0
+@@ -232,21 +234,23 @@ def _getaddrinfo(host, port=53, family=0, type=0, proto=0, flags=0):
+     result = cache.get(cachename, None)
+ 
+     if result is None:
+-        try:
+-            result = _socket.getaddrinfo(host, port, family, type, proto, flags)
+-        except BaseException as err:
+-            result = None
+-            logging.error('GETADDRINFO-ERROR: {0} - {1}'.format(host, err))
++        if is_ip.search(host):
++            if host.find(':') > -1:
++                result = [(10, 1, 6, '', (host, port, 0, 0))]
++            else:
++                result = [(2, 1, 6, '', (host, port))]
++
++        else:
++            try:
++                result = _socket.getaddrinfo(host, port, family, type, proto, flags)
++            except BaseException as err:
++                result = None
++                logging.error('GETADDRINFO-ERROR: {0} - {1}'.format(host, err))
+ 
+         if result:
+             ips = list((map(lambda x: x[4][0], result)))
+             if ips:
+-                #logging.info('GETADDRINFO-CACHED: {0}/{1} = {2}'.format(host, port, ', '.join(ips)))
+                 cache.add(obj=CachedObject(name=cachename, obj=result, ttl=604800)) # 7 Days
+-    #else:
+-    #    ips = list((map(lambda x: x[4][0], result)))
+-    #    if ips:
+-    #        #logging.info('GETADDRINFO-CACHE-HIT: {0}/{1} = {2}'.format(host, port, ', '.join(ips)))
+ 
+     beingchecked.discard(cachename)
+ 
+@@ -2010,6 +2014,8 @@ def dns_query(name, rdclass, rdtype, qid, cip, unfilter, fttl):
+ 
+         #rttstart = time.time()
+         response, _ = dox_request(qid, qname, rdtype, cachename, addrs, False, cip)
++        #rresponse, _ = root_resolve(qname, rdtype)
++        #logging.info('DEBUG: {0}'.format(rresponse))
+         #rttend = time.time()
+         #logging.info('RTT [{0}]: Resolving {1} took {2} msec'.format(qid, cachename, round((rttend - rttstart) * 1000)))
+ 
+@@ -2313,6 +2319,89 @@ def update_ttls(qid, qname, result, ttl):
+     return result
+ 
+ 
++# !!!! NEEDS WORK - TEST !!!!
++def root_resolve(qname, qtype):
++    if config['rootservers']:
++        logging.info('ROOT-RESOLVE: {0}/{1}'.format(qname, qtype))
++        nsaddr = config['rootservers']
++        qname = '{0}.'.format(qname.strip('.'))
++        rqname = ''
++        for label in filter(None, qname.strip('.').split('.')[::-1]):
++            rqname = '{0}.{1}'.format(label, rqname)
++            logging.info('ROOT-RESOLVE: {0} - Query for {1} to {2}'.format(qname, rqname, ', '.join(nsaddr)))
++            message = dns.message.make_query(encode_0x20(rqname), qtype)
++            if type == dns.rdatatype.ANY:
++                message.flags |= dns.flags.AD
++                message.find_rrset(message.additional, dns.name.root, 65535, dns.rdatatype.OPT, create=True, force_unique=True)
++
++            response = False
++            try:
++                response = dns.query.udp(message, nsaddr[0], timeout=5, port=53)
++
++            except BaseException as err:
++                logging.error('QUERY-ERROR: Query for {0}/IN/{1} to {2} - {3}'.format(qname, dns.rdatatype.to_text(qtype), ', '.join(nsaddr), err))
++
++            if response:
++                if response.rcode() == dns.rcode.NOERROR:
++                    if response.answer:
++                        return response, response.rcode
++                    elif response.authority:
++                        addr = False
++                        if response.additional:
++                            addr = list()
++                            for rrset in response.additional:
++                                if str(rrset.name) == rqname and rrset.rdtype in (1, 28): # Get A/AAAA
++                                   addr +=list(map(str, rrset))
++
++                        if not addr:
++                            # Fetch A/AAAA for NS and stick into nsaddr
++                            ns = list()
++                            for rrset in response.authority:
++                                if str(rrset.name) == rqname and rrset.rdtype == 2: # Get NS
++                                   ns +=list(map(str, rrset))
++
++                            if ns:
++                                addr = list()
++                                for nsname in ns:
++                                   for rrtype in (1, 28):
++                                       logging.info('ROOT-RESOLVE: Query for {0} to {1}'.format(nsname, ', '.join(nsaddr)))
++                                       message = dns.message.make_query(encode_0x20(nsname), rrtype) # Get address
++
++                                       response = False
++                                       try:
++                                           response = dns.query.udp(message, nsaddr[0], timeout=5, port=53) # Use NSADDR standing
++
++                                       except BaseException as err:
++                                           logging.error('QUERY-ERROR: Query for {0}/IN/{1} to {2} - {3}'.format(nsname, dns.rdatatype.to_text(rrtype), ', '.join(nsaddr), err))
++
++                                       if response:
++                                           if response.rcode() == dns.rcode.NOERROR:
++                                               for rrset in response.answer:
++                                                   if str(rrset.name) == nsname and rrset.rdtype in (1, 28): # Get A/AAAA
++                                                       addr +=list(map(str, rrset))
++
++                        if addr:
++                            nsaddr = addr
++                            if labelcount > 0:
++                                labelcount -= 1
++
++                            else:
++                                break # No answer
++                        else:
++                            break # No referal from additional
++
++                    else:
++                        break # No referal from authoritative
++
++                else:
++                    break # No referal
++
++            else:
++                break
++
++    return None, dns.rcode.SERVFAIL
++
++
+ # !!!! WORK IN PROGRESS
+ # Code based and adapted on: https://www.bortzmeyer.org/hackathon-ietf-101.html
+ def dox_request(qid, qname, rdtype, cachename, urls, rfc8484, cip):
+@@ -2369,13 +2458,22 @@ def dox_request(qid, qname, rdtype, cachename, urls, rfc8484, cip):
+     elif config['force6']:
+         af = 10
+         aftag = 'IPv6'
+-    elif config['smartip'] and icip:
+-        if ip6 is False or rdtype == dns.rdatatype.A or ip4arpa.search(qname):
+-            af = 2
+-            aftag = 'IPv4'
+-        elif ip6 is True or rdtype == dns.rdatatype.AAAA or ip6arpa.search(qname):
+-            af = 10
+-            aftag = 'IPv6'
++    elif config['smartip']:
++        if icip:
++            if ip6:
++                af = 10
++                aftag = 'IPv6'
++            else:
++                af = 2
++                aftag = 'IPv4'
++
++        else:
++            if rdtype == dns.rdatatype.A or ip4arpa.search(qname):
++                af = 2
++                aftag = 'IPv4'
++            elif rdtype == dns.rdatatype.AAAA or ip6arpa.search(qname):
++                af = 10
++                aftag = 'IPv6'
+ 
+     retries = 0
+     starttime = int(time.time())
+@@ -2391,36 +2489,39 @@ def dox_request(qid, qname, rdtype, cachename, urls, rfc8484, cip):
+                     if config['nextdns'] and config['nextdns_id']:
+                         url += '/{0}-{1}'.format(regex.sub('\s+', '%20', config['nextdns_id']), regex.sub('[\.\:]+', '-', cip))
+ 
+-                    #ips = '-'
+-                    #cached = cache.get('{0}/443/GETADDRINFO'.format(url.split('/')[2]))
+-                    #if cached:
+-                    #    ips = list((map(lambda x: x[4][0], cached)))
+-                    #else:
+-                    #    aftag = 'AUTO-IPv4/6'
+-                    #    af = None
+-
+-                    #if af is not None and (af == 2 and len(list(filter(is_ip4.search, ips))) < 1) or (af == 10 and len(list(filter(is_ip6.search, ips))) < 1):
+-                    #    aftag = 'AUTO-IPv4/6'
+-                    #    af = None
++                    ips = False
++                    if af is not None:
++                        cached = cache.get('{0}/443/GETADDRINFO'.format(url.split('/')[2]))
++                        if cached:
++                            if af == 2:
++                                ips = list(filter(is_ip4.search, list((map(lambda x: x[4][0], cached)))))
++                            elif af == 10:
++                                ips = list(filter(is_ip6.search, list((map(lambda x: x[4][0], cached)))))
++
++                    #if ips:
++                    #    logging.debug('BOOTSTRAP: {0} - {1} - {2} -> {3} ({4})'.format(cip, ip6, url, ', '.join(ips), aftag))
++                    if not ips:
++                        ips = [None]
++         
++                    for ip in ips:
++                        if ip and ip.find(':') > -1:
++                            ip = '[{0}]'.format(ip)
+ 
+-                    if config['log_forwards']:
+-                        #logging.info('DOH-QUERY [#{0}]: Query for {1}/IN/{2} to {3}@{4} ({5} - {6})'.format(retries, qname, dns.rdatatype.to_text(rdtype), url, port, aftag, ', '.join(ips)))
+-                        logging.info('DOH-QUERY [#{0}]: Query for {1}/IN/{2} to {3}@{4} ({5})'.format(retries, qname, dns.rdatatype.to_text(rdtype), url, port, aftag))
++                        if config['log_forwards']:
++                            logging.info('DOH-QUERY [#{0}]: Query for {1}/IN/{2} to {3}@{4} (BOOTSTRAP-{5}: {6})'.format(retries, qname, dns.rdatatype.to_text(rdtype), url, port, aftag, ip))
+ 
+-                    response = False
+-                    try:
+-                        # !!!! Do something with bootstrap_address=str (ips)
+-                        #response = dns.query.https(message, url, post=config['doh_post'], port=int(port), timeout=5, af=af, session=requests_session)
+-                        response = dns.query.https(message, url, post=config['doh_post'], port=int(port), timeout=5, session=requests_session)
++                        response = False
++                        try:
++                            response = dns.query.https(message, url, post=config['doh_post'], port=int(port), timeout=5, session=requests_session, bootstrap_address=str(ip))
+ 
+-                    except BaseException as err:
+-                        logging.error('DOH-ERROR: Query for {0}/IN/{1} to {2} - {3}'.format(qname, dns.rdatatype.to_text(rdtype), url, err))
+-                        if af is not None:
+-                            af = None
+-                            fastretry = True
++                        except BaseException as err:
++                            logging.error('DOH-ERROR: Query for {0}/IN/{1} to {2} - {3}'.format(qname, dns.rdatatype.to_text(rdtype), url, err))
++                            if af is not None:
++                                af = None
++                                fastretry = True
+ 
+-                    if response:
+-                        return response, response.rcode()
++                        if response:
++                            return response, response.rcode()
+ 
+                 #elif url.startswith('https://'):
+                 #    message.id = 0 # DoH requests this
+@@ -3108,9 +3209,9 @@ def run_server():
+ 
+                         if not check_badip(ip):
+                             if tag == 'IPV6':
+-                                getaddrinfo.append((10, 1, 6, '', (ip, 443, 0, 0)))
++                                getaddrinfo.append((10, 1, 6, '', (ip, aport, 0, 0)))
+                             else:
+-                                getaddrinfo.append((2, 1, 6, '', (ip, 443)))
++                                getaddrinfo.append((2, 1, 6, '', (ip, aport)))
+ 
+                             logging.info('{0}-{1}-SERVER-ADDED: {2} = BOOTSTRAP:{3} ({4})'.format(dox, tag, dnsserver, ip, geo(ip)))
+ 
+@@ -3173,6 +3274,10 @@ if __name__ == '__main__':
+     # Nameservers to forward to
+     config['nameservers'] = ['8.8.8.8', '8.8.4.4', '2001:4860:4860::8888', '2001:4860:4860::8844']
+ 
++    # Root-servers
++    # https://www.internic.net/domain/named.root
++    config['rootservers'] = ['198.41.0.4', '2001:503:ba3e::2:30', '199.9.14.201', '2001:500:200::b', '192.33.4.12', '2001:500:2::c', '199.7.91.13', '2001:500:2d::d', '192.203.230.10', '2001:500:a8::e', '192.5.5.241', '2001:500:2f::f', '192.112.36.4', '2001:500:12::d0d', '198.97.190.53', '2001:500:1::53', '192.36.148.17 2001:7fe::53', '192.58.128.30', '2001:503:c27::2:30', '193.0.14.129', '2001:7fd::1', '199.7.83.42', '2001:500:9f::42', '202.12.27.33', '2001:dc3::35']
++
+     # Use DoH POST instead of GET (Recommended: POST)
+     config['doh_post'] = True
+ 
+@@ -3475,6 +3580,7 @@ if __name__ == '__main__':
+ 
+     # Setup requests sessions
+     requests_session = requests.Session()
++    #requests_session.mount('https://', HTTP20Adapter())
+     #abuseipdb_session = requests.Session()
+ 
+     # Geo-IP
+diff --git a/requirements.txt b/requirements.txt
+index 3790b67..64ba264 100644
+--- a/requirements.txt
++++ b/requirements.txt
+@@ -3,7 +3,7 @@ chardet==3.0.4 # Latest version supported by requests
+ clientsubnetoption>=2.1.1
+ dnspython>=2.0.0
+ geoip2>=2.9.0         
+-hyper>=0.7.0
++#hyper>=0.7.0
+ idna>=2.8
+ ip2location>=8.4.1
+ IPy>=1.0

@@ -1,0 +1,59 @@
+diff --git a/deugniets.py b/deugniets.py
+index 9cf1e11..151b8a8 100644
+--- a/deugniets.py
++++ b/deugniets.py
+@@ -1,7 +1,7 @@
+ #!/usr/bin/env python3
+ '''
+ ===========================================================================
+- deugniets.py v3.20-20200612 Copyright 2019-2020 by cbuijs@chrisbuijs.com
++ deugniets.py v3.21-20200612 Copyright 2019-2020 by cbuijs@chrisbuijs.com
+ ===========================================================================
+ 
+  Based on: https://github.com/supriyo-biswas/adblock-dns-server
+@@ -2488,9 +2488,9 @@ def dox_request(qid, qname, rdtype, cachename, urls, rfc8484, cip):
+             logging.info('EDNS-CLIENT-SUBNET-PRIVACY [{0}]: {1} -> {2}/{3}'.format(qid, ccip, ocip, bits))
+ 
+         cso = clientsubnetoption.ClientSubnetOption(ocip, bits)
+-        message.use_edns(edns=0, ednsflags=0, payload=1220, request_payload=None, options=[cso])
++        message.use_edns(edns=True, ednsflags=0, payload=1220, request_payload=None, options=[cso])
+     else:
+-        message.use_edns(edns=0, ednsflags=0, payload=1220, request_payload=None, options=None)
++        message.use_edns(edns=False, ednsflags=0, payload=1220, request_payload=None, options=None)
+ 
+     af = None
+     aftag = 'AUTO-IPv4/6'
+@@ -2828,21 +2828,24 @@ def handle_query(raw_data, client_ip):
+         logging.error('REQUEST-ERROR: Query from {0} - {1}'.format(client_ip, e))
+         return
+ 
++    client_ip = str(client_ip)
++
+     # Need IPy.IP for octal conversion to real IP
+     #if hasattr(query, 'options'):
+     if config['use_ecs_ip'] and hasattr(query, 'options'):
+         for opt in query.options:
+-            if hasattr(opt, 'ip') and hasattr(opt, 'mask'):
+-                ipaddr = IP(opt.ip).strNormal(0)
+-                if config['log_ecs'] and config['log_verbose']:
+-                    logging.info('EDNS-CLIENT-SUBNET [{0}]: Client {1} provides subnet {2}/{3}'.format(query.id, client_ip, ipaddr, opt.mask))
++            if isinstance(opt, ClientSubnetOption):
++                if hasattr(opt, 'ip') and hasattr(opt, 'mask'):
++                    ipaddr = IP(opt.ip).strNormal(0)
++                    if opt.mask in (None, 0, 32, 128):
++                        if config['log_ecs'] and config['log_verbose']:
++                            logging.info('EDNS-CLIENT-SUBNET [{0}]: Client {1} -> {2} ({3})'.format(query.id, client_ip, ipaddr, geo(ipaddr)))
++                        client_ip = str(ipaddr)
+ 
+-                if opt.mask in (None, 0, 32, 128):
+-                    if config['log_ecs'] and config['log_verbose']:
+-                        logging.info('EDNS-CLIENT-SUBNET [{0}]: Client {1} -> {2} ({3})'.format(query.id, client_ip, ipaddr, geo(ipaddr)))
+-                    client_ip = ipaddr
++                    elif config['log_ecs'] and config['log_verbose']:
++                        logging.info('EDNS-CLIENT-SUBNET [{0}]: Client {1} provides subnet {2}/{3}'.format(query.id, client_ip, ipaddr, opt.mask))
+ 
+-                break
++                    break
+ 
+     #logging.debug('GEO-IP: {0} - {1}'.format(client_ip, geo(client_ip)))
+ 

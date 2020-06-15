@@ -1,0 +1,661 @@
+diff --git a/deugniets.py b/deugniets.py
+index c001bd6..3d1d321 100644
+--- a/deugniets.py
++++ b/deugniets.py
+@@ -1,7 +1,7 @@
+ #!/usr/bin/env python3
+ '''
+ ===========================================================================
+- deugniets.py v2.895-20200423 Copyright 2019-2020 by cbuijs@chrisbuijs.com
++ deugniets.py v2.90-20200430 Copyright 2019-2020 by cbuijs@chrisbuijs.com
+ ===========================================================================
+ 
+  Based on: https://github.com/supriyo-biswas/adblock-dns-server
+@@ -39,6 +39,7 @@ Done:
+  - listed_cache redundant due to caching
+  - nameservers now accept port-numbers (@<num> format)
+  - Rewrite smartip code
++ - Reworked smartdoms routines
+  - Better timeout handling
+  - Better logging
+  - Optimize filtering
+@@ -117,7 +118,6 @@ from IPy import IP
+ 
+ # Stuff needed for DoH
+ import base64
+-#from hyper.contrib import HTTP20Adapter
+ 
+ # GeoIP
+ import geoip2.database
+@@ -232,23 +232,37 @@ is_regex = regex.compile('^/.*/$', regex.I)
+ 
+ # Replace socket.getaddrinfo with caching version to speedup requests/urllib/abuseipdb
+ def _getaddrinfo(host, port=53, family=0, type=0, proto=0, flags=0):
+-    cachename = '{0}/{1}/GETADDRINFO'.format(host, port)
+     #logging.debug('GETADDRINFO: {0} {1} {2} {3} {4} {5}'.format(host, port, family, type, proto, flags))
+-    result = cache.get(cachename)
+-    tag = 'CACHE-HIT'
++    cachename = '{0}/{1}/GETADDRINFO'.format(host, port)
++
++    count = 0
++    while count < config['retry_count'] and cachename in beingchecked:
++        count += 1
++        #logging.debug('{0}-BLACKLIST-SLEEP: {1} (#{2})'.format(valuetype, testvalue, count))
++        time.sleep(config['retry_wait'])
++
++    beingchecked.add(cachename)
++
++    result = cache.get(cachename) or None
++
+     if result is None:
+-        tag = 'CACHED'
+         try:
+             result = _socket.getaddrinfo(host, port, family, type, proto, flags)
+         except BaseException as err:
++            result = None
+             logging.error('GETADDRINFO-ERROR: {0} - {1}'.format(host, err))
+ 
+-    if result:
+-        #logging.info('GETADDRINFO-RESULT: {0}'.format(result))
+-        ips = list((map(lambda x: x[4][0], result)))
+-        if ips:
+-            cache.add(obj=CachedObject(name=cachename, obj=result, ttl=config['min_ttl'])) # Cache 40 mins, see: https://blog.apnic.net/2019/11/12/stop-using-ridiculously-low-dns-ttls/
+-            #logging.debug('GETADDRINFO-{0}: {1} -> {2}'.format(tag, host, ', '.join(ips)))
++        if result:
++            ips = list((map(lambda x: x[4][0], result)))
++            if ips:
++                #logging.info('GETADDRINFO-CACHED: {0}/{1} = {2}'.format(host, port, ', '.join(ips)))
++                cache.add(obj=CachedObject(name=cachename, obj=result, ttl=604800)) # 7 Days
++    #else:
++    #    ips = list((map(lambda x: x[4][0], result)))
++    #    if ips:
++    #        #logging.info('GETADDRINFO-CACHE-HIT: {0}/{1} = {2}'.format(host, port, ', '.join(ips)))
++
++    beingchecked.discard(cachename)
+ 
+     return result
+ 
+@@ -259,7 +273,7 @@ socket.getaddrinfo = _getaddrinfo
+ def setup_nameservers():
+     '''Setup NameServers to Forward to'''
+     dns.resolver.default_resolver = dns.resolver.Resolver(configure=False)
+-    dns.resolver.default_resolver.nameservers = ['9.9.9.9', '149.112.112.112', '2620:fe::9', '2620:fe::fe:9']
++    dns.resolver.default_resolver.nameservers = ['8.8.8.8', '8.8.4.4', '2001:4860:4860::8888', '2001:4860:4860::8844']
+     dns.resolver.default_resolver.port = 53
+     dns.resolver.default_resolver.use_edns(0, 0, 1220) # DNSFLag Day 2020 advice. 1220:ipv6, 1480:ipv4
+     dns.resolver.default_resolver.timeout = 5
+@@ -438,15 +452,15 @@ def encode_0x20(st):
+ def cleansplit(s):
+     return regex.split('\s*#\s*', s)[0].strip().rstrip('!')
+ 
+-
+-def read_list(filenames, listname, domlst, ip4lst, ip6lst, rxlst, unlst, unip4, unip6, geolst):
++# !!! Include alias, forwarder and forcettl as lists
++def read_list(filenames, listname, domlst, ip4lst, ip6lst, rxlst, unlst, unip4, unip6, geolst, alst, flst, fttlst):
+     '''Get lists from either file or URL'''
+     for filename in filenames:
+ 
+         logging.info('PROCESS-LIST: {0} ...'.format(filename))
+ 
+         ftype = False
+-        if filename.find(':') > 0:
++        if filename.find(':') > -1:
+             ft = filename.split(':')[0].upper()
+             filename = filename.split(':')[1]
+             if ft in ('IP', 'DOM', 'DOMWORD', 'GEO', 'ALIAS', 'FORWARD', 'TTL', 'UNFILTER', 'RX'):
+@@ -474,7 +488,7 @@ def read_list(filenames, listname, domlst, ip4lst, ip6lst, rxlst, unlst, unip4,
+ 
+             logging.info('PROCESS-LIST ({0}): Processing {1} lines (out of {2}) ...'.format(lname, len(cleanlines), len(lines)))
+ 
+-            oldtotal = len(domlst) + len(ip4lst) + len(ip6lst) + len(rxlst) + len(unlst) + len(unip4) + len(unip6) + len(geolst) + len(alias) + len(forwarder) + len(forcettl)
++            oldtotal = len(domlst) + len(ip4lst) + len(ip6lst) + len(rxlst) + len(unlst) + len(unip4) + len(unip6) + len(geolst) + len(alst) + len(flst) + len(fttlst)
+             
+             if ftype is False or ftype == 'IP':
+                 logging.info('PROCESS-LIST ({0}): Getting IPs...'.format(lname))
+@@ -503,7 +517,7 @@ def read_list(filenames, listname, domlst, ip4lst, ip6lst, rxlst, unlst, unip4,
+                 for entry in list(filter(None, filter(is_geo.search, cleanlines))):
+                     entry = entry.lstrip('@')
+                     loc = False
+-                    if entry.find(':') > 0:
++                    if entry.find(':') > -1:
+                         loc, entry = entry.split(':')[0:2]
+                         if loc not in ('CONTINENT', 'COUNTRY', 'AREA', 'CITY'):
+                             logging.error('PROCESS-LIST ({0}): Invalid GEO type {1} ({1}:{2})'.format(lname, loc, entry))
+@@ -534,7 +548,7 @@ def read_list(filenames, listname, domlst, ip4lst, ip6lst, rxlst, unlst, unip4,
+                     if domain and value:
+                         domain = make_dom(domain)
+                         logging.debug('SPOOF: {0} redirect to {1}'.format(domain, ', '.join(value.split(','))))
+-                        alias[domain] = value
++                        alst[domain] = value
+                     else:
+                         logging.warning('LIST [{0}]: Invalid ALIAS Syntax: \"{1}\"'.format(lname, entry))
+ 
+@@ -545,7 +559,7 @@ def read_list(filenames, listname, domlst, ip4lst, ip6lst, rxlst, unlst, unip4,
+                     if domain and value:
+                         domain = make_dom(domain)
+                         logging.debug('FORWARDER: {0} forward to {1}'.format(domain, ', '.join(value.lower().split(','))))
+-                        forwarder[domain] = value.lower()
++                        flst[domain] = value.lower()
+                     else:
+                         logging.warning('LIST [{0}]: Invalid FORWARDER Syntax: \"{1}\"'.format(lname, entry))
+ 
+@@ -556,7 +570,7 @@ def read_list(filenames, listname, domlst, ip4lst, ip6lst, rxlst, unlst, unip4,
+                     if domain and value:
+                         domain = make_dom(domain)
+                         logging.debug('TTL: {0} = {1}'.format(domain, value))
+-                        forcettl[domain] = int(value)
++                        fttlst[domain] = int(value)
+                     else:
+                         logging.warning('LIST [{0}]: Invalid TTL Syntax: \"{1}\"'.format(lname, entry))
+ 
+@@ -601,13 +615,12 @@ def read_list(filenames, listname, domlst, ip4lst, ip6lst, rxlst, unlst, unip4,
+                         logging.warning('LIST [{0}]: Invalid Syntax: \"{1}\" - {2}'.format(lname, entry, err))
+ 
+ 
+-            newtotal = len(domlst) + len(ip4lst) + len(ip6lst) + len(rxlst) + len(unlst) + len(unip4) + len(unip6) + len(geolst) + len(alias) + len(forwarder) + len(forcettl)
++            newtotal = len(domlst) + len(ip4lst) + len(ip6lst) + len(rxlst) + len(unlst) + len(unip4) + len(unip6) + len(geolst) + len(alst) + len(flst) + len(fttlst)
+             total = newtotal - oldtotal
+ 
+             logging.info('PROCESS-LIST ({0}): Added {1} new entries (Skipped {2} comment/overlap/duplicate/empty/invalid)...'.format(lname, total, len(cleanlines) - total))
+ 
+-    return domlst, ip4lst, ip6lst, rxlst, unlst, unip4, unip6, geolst
+-
++    return domlst, ip4lst, ip6lst, rxlst, unlst, unip4, unip6, geolst, alst, flst, fttlst
+ 
+ def get_value(entry, sepp, filt, addvalue):
+     elements = list(regex.split('\s*{0}\s*'.format(sepp), entry))
+@@ -977,7 +990,7 @@ def check_blacklisted(testvalue, valuetype, checkip):
+             return True
+   
+         ip4 = True
+-        if testvalue.find(':') > 0:
++        if testvalue.find(':') > -1:
+             ip4 = False
+ 
+         # Check against IP4
+@@ -1045,6 +1058,7 @@ def check_rx(valuetype, testvalue, rxlst, rxbiglst, tag):
+ 
+     return False
+ 
++
+ def check_dom(valuetype, testvalue, domlist, listname, onlyparent, smart):
+     '''Match domain against list, works for subdomains too'''
+     cachename = 'DOM#{0}#{1}#{2}'.format(listname or 'NONE', valuetype, testvalue)
+@@ -1093,7 +1107,8 @@ def check_dom_smart(valuetype, testvalue, domlist, listname, onlyparent):
+ def check_dom_walk(valuetype, testvalue, domlist, listname, onlyparent):
+     fqdn = ''
+     for label in filter(None, testvalue.strip('.').split('.')[::-1]):
+-        fqdn = '{0}.{1}'.format(label, fqdn.lstrip('.'))
++        #fqdn = '{0}.{1}'.format(label, fqdn.lstrip('.'))
++        fqdn = '{0}.{1}'.format(label, fqdn)
+         #logging.debug('{0}-DOMWALK [{1}]: \"{2}\" -> \"{3}\"'.format(valuetype, listname, testvalue, fqdn))
+         if onlyparent and fqdn == testvalue:
+             return False
+@@ -1142,22 +1157,22 @@ def check_geo(valuetype, testvalue, geolst, listname):
+     if giploc:
+         # !!! Make nicer/quicker
+         if continent in geolst or 'CONTINENT:{0}'.format(continent) in geolst:
+-            if config['log_hits'] and config['log_verbose'] and listname:
++            if config['log_hits'] and listname:
+                 logging.warning('{0}-GEO-CONTINENT-HIT [{1}]: {2} -> {3} ({4})'.format(valuetype, listname, testvalue, continent, giploc))
+             return True
+ 
+         if country in geolst or 'COUNTRY:{0}'.format(country) in geolst:
+-            if config['log_hits'] and config['log_verbose'] and listname:
++            if config['log_hits'] and listname:
+                 logging.warning('{0}-GEO-COUNTRY-HIT [{1}]: {2} -> {3} ({4})'.format(valuetype, listname, testvalue, country, giploc))
+             return True
+ 
+         if area in geolst or 'AREA:{0}'.format(area) in geolst:
+-            if config['log_hits'] and config['log_verbose'] and listname:
++            if config['log_hits'] and listname:
+                 logging.warning('{0}-GEO-AREA-HIT [{1}]: {2} -> {3} ({4})'.format(valuetype, listname, testvalue, area, giploc))
+             return True
+ 
+         if city in geolst or 'CITY:{0}'.format(city) in geolst:
+-            if config['log_hits'] and config['log_verbose'] and listname:
++            if config['log_hits'] and listname:
+                 logging.warning('{0}-GEO-CITY-HIT [{1}]: {2} -> {3} ({4})'.format(valuetype, listname, testvalue, city, giploc))
+             return True
+ 
+@@ -1183,9 +1198,11 @@ def check_geo(valuetype, testvalue, geolst, listname):
+ 
+ # !!! FIX - Better handling of quotas per dat for AbuseIPDB
+ def check_badip(cip):
+-    if config['filtering'] is False:
++    if not config['filtering'] or not is_ip.search(cip):
+         return False
+ 
++    #logging.info('BADIP: Checking {0}'.format(cip))
++
+     count = 0
+     while count < config['retry_count'] and cip in beingchecked:
+         count += 1
+@@ -1199,7 +1216,7 @@ def check_badip(cip):
+ 
+     beingchecked.add(cip)
+ 
+-    if cip.find(':') > 0:
++    if cip.find(':') > -1:
+         wl_ip = wl_ip6
+         bl_ip = bl_ip6
+         private = private6
+@@ -1218,13 +1235,13 @@ def check_badip(cip):
+ 
+     if (cip in private) or (cip in wl_ip):
+         #if config['log_hits']:
+-            #logging.warning('ACL-WHITELIST-HIT: Client {0} -> {1}'.format(cip, wl_ip.get_key(cip)))
++            #logging.warning('IP-WHITELIST-HIT: {0} -> {1}'.format(cip, wl_ip.get_key(cip)))
+         beingchecked.discard(cip)
+         return False
+ 
+     elif cip in bl_ip:
+         if config['log_hits']:
+-            logging.warning('ACL-BLACKLIST-HIT: Client {0} -> {1}'.format(cip, bl_ip.get_key(cip)))
++            logging.warning('IP-BLACKLIST-HIT: {0} -> {1}'.format(cip, bl_ip.get_key(cip)))
+         beingchecked.discard(cip)
+         return True
+ 
+@@ -1286,7 +1303,7 @@ def check_badip(cip):
+         beingchecked.discard(cip)
+         return True
+ 
+-    wl_ip[cip] = True # !!! Use something else, will work for now - Can be utilized/misused to auto-whitelist when flooding
++    wl_ip[cip] = 'Auto-Whitelisted' # !!! Use something else, will work for now - Can be utilized/misused to auto-whitelist when flooding
+ 
+     beingchecked.discard(cip)
+     return False
+@@ -1435,7 +1452,7 @@ def dns_query(name, rdclass, rdtype, qid, cip, unfilter, fttl):
+ 
+         if config['use_ecs_ip']:
+             tag = 'IP4'
+-            if cip.find(':') > 0:
++            if cip.find(':') > -1:
+                 tag = 'IP6'
+ 
+             cachename = '{0}/{1}'.format(cachename, tag)
+@@ -1443,11 +1460,15 @@ def dns_query(name, rdclass, rdtype, qid, cip, unfilter, fttl):
+     elif cip == 'SPOOFER':
+         unfilter = True
+ 
+-    if unfilter or config['smartip']:
+-        if unfilter:
+-           returnstatus = 'OK-UNFILTERED'
++    if unfilter:
+         cachename = '{0}/{1}'.format(cachename, cip)
+ 
++    # !!! CHECK for smartip-caching, probably already covered by abive IP4/6 tag
++    #if unfilter or config['smartip']:
++    #   if unfilter:
++    #       returnstatus = 'OK-UNFILTERED'
++    #    cachename = '{0}/{1}'.format(cachename, cip)
++
+     if not unfilter:
+         if qrdtype == 'ANY' and config['blockany']:
+             logging.warning('BLOCK-ANY-HIT [{0}]: {1}'.format(qid, cachename))
+@@ -1598,16 +1619,17 @@ def dns_query(name, rdclass, rdtype, qid, cip, unfilter, fttl):
+                 break
+ 
+ 
++    # Prematch forwarders/aliases to speed things up
+     matcha = False
+     matchf = check_dom('NAME', qname, forwarder, 'FORWARDER', False, False)
+-    if matchf and config['smartdoms'] and check_dom_smart('FORWARDER', qname, bl_dom, 'BLACKLIST', True):
++    if matchf and unfilter is False and config['filtering'] and config['smartdoms'] and check_dom_smart('FORWARDER', qname, bl_dom, 'BLACKLIST', True):
+         matchf = False
+         if config['smartdoms']:
+             matcha = check_dom_smart('FORWARDER', qname, alias, 'ALIAS', True)
+ 
+         if matcha is False:
+             blacklistname = qname
+-            returnstatus = 'BLACKLISTED'
++            returnstatus = 'SMARTDOM-BLACKLISTED'
+             rv = (config['blacklist_rcode'], [], [], [])
+ 
+     if rv is None and config['filtering'] and config['filter_request'] and unfilter is False and matchf is False:
+@@ -1639,7 +1661,7 @@ def dns_query(name, rdclass, rdtype, qid, cip, unfilter, fttl):
+ 
+         ip6 = None
+         if is_ip.search(cip):
+-            if cip.find(':') > 0:
++            if cip.find(':') > -1:
+                 ip6 = True
+             else:
+                 ip6 = False
+@@ -1939,7 +1961,7 @@ def dns_query(name, rdclass, rdtype, qid, cip, unfilter, fttl):
+         else:
+             ttl = config['min_ttl']
+ 
+-        if returnstatus == 'BLACKLISTED':
++        if returnstatus.find('BLACKLISTED') > -1:
+             tag = 'blocked'
+             if qname.strip('.') != blacklistname.strip('.'):
+                  tag = '{0}.cloaked'.format(tag)
+@@ -2045,7 +2067,7 @@ def update_ttls(qid, qname, result, left, check):
+ # !!!! WORK IN PROGRESS
+ # Code based and adapted on: https://www.bortzmeyer.org/hackathon-ietf-101.html
+ def dox_request(qid, qname, rdtype, cachename, urls, rfc8484, cip):
+-    #global requests_session
++    global requests_session
+ 
+     icip = cip
+     if not is_ip.search(cip):
+@@ -2063,7 +2085,7 @@ def dox_request(qid, qname, rdtype, cachename, urls, rfc8484, cip):
+     if config['use_ecs_ip'] and icip:
+         ccip = cip
+         bits = 0
+-        if cip.find(':') > 0:
++        if cip.find(':') > -1:
+             if config['override_ecs_ip6'] and is_ip6.search(config['override_ecs_ip6']):
+                 ccip = config['override_ecs_ip6']
+             bits = config['ecs_privacy6'] or 48
+@@ -2087,8 +2109,14 @@ def dox_request(qid, qname, rdtype, cachename, urls, rfc8484, cip):
+         message.use_edns(edns=0, ednsflags=0, payload=1220, request_payload=None, options=None)
+ 
+     af = None
+-    aftag = 'Auto-IPv4/6'
+-    if config['smartip'] and icip:
++    aftag = 'AUTO-IPv4/6'
++    if config['force4']:
++        af = 2
++        aftag = 'IPv4'
++    elif config['force6']:
++        af = 10
++        aftag = 'IPv6'
++    elif config['smartip'] and icip:
+         if rdtype == dns.rdatatype.A or is_ip4.search(cip) or ip4arpa.search(qname):
+             af = 2
+             aftag = 'IPv4'
+@@ -2110,28 +2138,32 @@ def dox_request(qid, qname, rdtype, cachename, urls, rfc8484, cip):
+                     if config['nextdns'] and config['nextdns_id']:
+                         url += '/{0}-{1}'.format(regex.sub('\s+', '%20', config['nextdns_id']), regex.sub('[\.\:]+', '-', cip))
+ 
+-                    if config['log_forwards']:
+-                        ips = '-'
+-                        cached = cache.get('{0}/443/GETADDRINFO'.format(url.split('/')[2]))
+-                        if cached:
+-                            ips = list((map(lambda x: x[4][0], cached)))
+-                            if (af == 2 and len(list(filter(is_ip4.search, ips))) < 1) or (af == 10 and len(list(filter(is_ip6.search, ips))) < 1):
+-                                aftag = 'Auto-IPv4/6'
+-                                af = None
++                    #ips = '-'
++                    #cached = cache.get('{0}/443/GETADDRINFO'.format(url.split('/')[2]))
++                    #if cached:
++                    #    ips = list((map(lambda x: x[4][0], cached)))
++                    #else:
++                    #    aftag = 'AUTO-IPv4/6'
++                    #    af = None
+ 
+-                        else:
+-                            aftag = 'Auto-IPv4/6'
+-                            af = None
++                    #if af is not None and (af == 2 and len(list(filter(is_ip4.search, ips))) < 1) or (af == 10 and len(list(filter(is_ip6.search, ips))) < 1):
++                    #    aftag = 'AUTO-IPv4/6'
++                    #    af = None
+ 
++                    if config['log_forwards']:
+                         #logging.info('DOH-QUERY [#{0}]: Query for {1}/IN/{2} to {3}@{4} ({5} - {6})'.format(retries, qname, dns.rdatatype.to_text(rdtype), url, port, aftag, ', '.join(ips)))
+                         logging.info('DOH-QUERY [#{0}]: Query for {1}/IN/{2} to {3}@{4} ({5})'.format(retries, qname, dns.rdatatype.to_text(rdtype), url, port, aftag))
+ 
+                     response = False
+                     try:
+-                        response = dns.query.https(message, url, post=config['doh_post'], port=int(port), timeout=5, af=af)
++                        # !!!! Do something with bootstrap_address=str (ips)
++                        response = dns.query.https(message, url, post=config['doh_post'], port=int(port), timeout=5, af=af, session=requests_session)
+ 
+                     except BaseException as err:
+                         logging.error('DOH-ERROR: Query for {0}/IN/{1} to {2} - {3}'.format(qname, dns.rdatatype.to_text(rdtype), url, err))
++                        if af is not None:
++                            af = None
++                            fastretry = True
+ 
+                     if response:
+                         return response, response.rcode()
+@@ -2199,7 +2231,7 @@ def dox_request(qid, qname, rdtype, cachename, urls, rfc8484, cip):
+                 # TLS
+                 elif url.startswith('tls://'): # Port 853
+                     servername = regex.sub('^' + regex.escape('tls://'), '', url)
+-                    if servername and servername.find('#') > 0:
++                    if servername and servername.find('#') > -1:
+                         servername, addr = servername.split('#')[0:2]
+                         servername, port = '{0}{1}'.format(servername, '@853').split('@')[0:2]
+                    
+@@ -2289,7 +2321,13 @@ def log_helper(qname, qrdtype, result, tag, qid, cip):
+     if len(result) > 4:
+         rcode = '{0}-{1}'.format(rcode, result[4])
+ 
+-    rlog = '{0} [{1}]: {2}/IN/{3} = {4} ({5} RRs)'.format(tag, qid, qname, qrdtype, rcode, countrv(result))
++    ttl = 0
++    if rcode == 'NOERROR' and result[1]:
++        ttl = result[1][-1].ttl
++    elif result[2]:
++        ttl = result[2][-1].ttl
++ 
++    rlog = '{0} [{1}]: {2}/IN/{3} {4} = {5} ({6} RRs)'.format(tag, qid, qname, qrdtype, ttl, rcode, countrv(result))
+     if cip:
+         rlog = '{0} to {1}'.format(rlog, cip)
+ 
+@@ -2329,7 +2367,7 @@ def geo(client_ip):
+     if config['geodb']:
+         cip = expand_ip(client_ip).split('/')[0]
+         ip6 = False
+-        if cip.find(':') > 0:
++        if cip.find(':') > -1:
+             ip6 = True
+ 
+         response = geo_cache.get(cip, None)
+@@ -2401,10 +2439,12 @@ def handle_query(raw_data, client_ip):
+     queryname = '{0}/{1}/{2}'.format(name, rdclasst, rdtypet)
+     bname = '{0}/{1}/*'.format(name, rdclasst)
+ 
++
+     if check_badip(cip):
+         logging.warning('DROP-CLIENT: {0} requesting {1}/{2}/{3} from {4}'.format(compress_ip(cip), name, rdtypet, rdclasst, geo(cip)))
+         return None # DROP
+ 
++
+     count = 0
+     while count < config['retry_count'] and bname in beingchecked:
+         count += 1
+@@ -2643,24 +2683,29 @@ def run_server():
+ 
+                     getaddrinfo = []
+                     for ip in dnsips:
+-                        if not check_geo('NEXTDNS-IP', ip, bl_geo, 'BLACKLIST'):
+-                            if ip.find(':') > 0:
+-                                tag = 'IPV6'
++                        tag = False
++                        if ip.find(':') > -1:
++                            tag = 'IPV6'
++                            wl_ip6[ip] = 'NEXTDNS-Server'
++                        else:
++                            tag = 'IPV4'
++                            wl_ip4[ip] = 'NEXTDNS-Server'
++
++                        if not check_badip(ip):
++                            if tag == 'IPV6':
+                                 getaddrinfo.append((10, 1, 6, '', (ip, 443, 0, 0)))
+                             else:
+-                                tag = 'IPV4'
+                                 getaddrinfo.append((2, 1, 6, '', (ip, 443)))
+ 
+                             logging.info('NEXTDNS-{0}-SERVER-ADDED: {1} = {2} ({3})'.format(tag, dnsurl, ip, geo(ip)))
+ 
+                         else:
+-                            logging.info('NEXTDNS-SERVER-DISCARDED: {0} ({1})'.format(dnsurl, geo(ip)))
++                            logging.warning('NEXTDNS-SERVER-DISCARDED: {0} ({1})'.format(dnsurl, geo(ip)))
+                             getaddrinfo = []
+                             newnameservers.remove(dnsurl)
+                             break
+ 
+                     if getaddrinfo:
+-                        #logging.info('NEXTDNS-GETADDR-CACHE: {0}'.format(getaddrinfo))
+                         cachednshost = '{0}/443/GETADDRINFO'.format(dnshost)
+                         cache.add(obj=CachedObject(name=cachednshost, obj=getaddrinfo, ttl=604800)) # 7 Days
+ 
+@@ -2675,39 +2720,69 @@ def run_server():
+         # !!! TODO: Define bootstrap servers to use to resolve below
+         # !!! TODO: Make it possible to use @<portnum>
+         for dnsserver in config['nameservers']:
+-            if dnsserver.find('#') < 0:
+-                newentry = False
++            newentry = False
++            hostname = dnsserver
++            ips = False
++            if dnsserver.find('#') > -1:
++                ips = regex.split('\s*,\s*', regex.split('\s*#\s*', dnsserver)[1])
++                dnsserver = dnsserver.split('#')[0]
+                 hostname = dnsserver
+-                if dnsserver.find('/') > 0:
+-                    hostname = dnsserver.split('/')[2]
+-
+-                dox = 'DNS'
+-                aport = 53
+-                if dnsserver.startswith('https://'):
+-                    dox = 'HTTPS'
+-                    aport = 443
+-                elif dnsserver.startswith('tls://'):
+-                    dox = 'TLS'
+-                    aport = 853
+-
+-                if dox != 'DNS':
+-                    ips = list(map(lambda x: x[4][0], socket.getaddrinfo('{0}.'.format(hostname.rstrip('.')), aport, type=socket.SOCK_STREAM)))
+-                    logging.info('{0}-NAME-SERVER: {1}://{2}@{3} ({4})'.format(dox, dox.lower(), hostname, aport, ', '.join(ips)))
++                
++            if hostname.find('/') > -1:
++                hostname = hostname.split('/')[2]
++
++            #if hostname.find('.opendns.com'):
++            #    config['force4'] = True
++            #    config['force6'] = False
++
++            dox = 'DNS'
++            aport = 53
++            if dnsserver.startswith('https://'):
++                dox = 'HTTPS'
++                aport = 443
++            elif dnsserver.startswith('tls://'):
++                dox = 'TLS'
++                aport = 853
++
++            # !!! Fix # addresses add
++            if dox != 'DNS':
++                if ips:
++                    getaddrinfo = []
+                     for ip in ips:
+-                        if dox == 'HTTPS':
+-                            newentry = dnsserver
++                        tag = False
++                        if ip.find(':') > -1:
++                            tag = 'IPV6'
++                            wl_ip6[ip] = '{0}-Server'.format(dox)
++                        else:
++                            tag = 'IPV4'
++                            wl_ip4[ip] = '{0}-Server'.format(dox)
++
++                        if not check_badip(ip):
++                            if tag == 'IPV6':
++                                getaddrinfo.append((10, 1, 6, '', (ip, 443, 0, 0)))
++                            else:
++                                getaddrinfo.append((2, 1, 6, '', (ip, 443)))
++
++                            logging.info('{0}-{1}-SERVER-ADDED: {2} = BOOTSTRAP:{3} ({4})'.format(dox, tag, dnsserver, ip, geo(ip)))
++
+                         else:
+-                            newentry = '{0}://{1}@{2}#{3}'.format(dox, hostname, aport, ip)
++                            logging.warning('{0}-SERVER-DISCARDED: {1} = BOOTSTRAP:{2} ({3})'.format(dox, dnsserver, ip, geo(ip)))
++
++                    if getaddrinfo:
++                        cachednshost = '{0}/{1}/GETADDRINFO'.format(hostname, aport)
++                        cache.add(obj=CachedObject(name=cachednshost, obj=getaddrinfo, ttl=604800)) # 7 Days
++
+                 else:
+-                    logging.info('{0}-NAME-SERVER: {1}://{2}@{3}'.format(dox, dox.lower(), hostname, aport))
+-                    newentry = 'dns://{0}@{1}'.format(hostname, aport)
+-                 
+-                if newentry:
+-                    newnameservers.append(newentry.lower())
++                    ips = list(map(lambda x: x[4][0], socket.getaddrinfo('{0}.'.format(hostname.rstrip('.')), aport, type=socket.SOCK_STREAM))) # Pre-cache
+ 
++                logging.info('{0}-NAME-SERVER: {1}://{2}@{3} ({4})'.format(dox, dox.lower(), hostname, aport, ', '.join(ips)))
++                newentry = dnsserver
+             else:
+-                logging.info('NAME-SERVER: {0}'.format(dnsserver))
+-                newnameservers.append(dnsserver)
++                logging.info('{0}-NAME-SERVER: {1}://{2}@{3}'.format(dox, dox.lower(), hostname, aport))
++                newentry = 'dns://{0}@{1}'.format(hostname, aport)
++                 
++            if newentry:
++                newnameservers.append(newentry.lower())
+ 
+     if newnameservers:
+         config['nameservers'] = newnameservers
+@@ -2747,7 +2822,7 @@ if __name__ == '__main__':
+     config['port'] = 53
+ 
+     # Nameservers to forward to
+-    config['nameservers'] = ['9.9.9.9', '149.112.112.112', '2620:fe::9', '2620:fe::fe:9']
++    config['nameservers'] = ['8.8.8.8', '8.8.4.4', '2001:4860:4860::8888', '2001:4860:4860::8844']
+ 
+     # Use DoH POST instead of GET (Recommended: POST)
+     config['doh_post'] = True
+@@ -2795,6 +2870,8 @@ if __name__ == '__main__':
+     config['blockany'] = True
+     config['blockroot'] = True
+     config['smartip'] = True
++    config['force4'] = False
++    config['force6'] = False
+     config['ignoreip'] = False
+     config['blockweird'] = True
+     config['check_iprev'] = False
+@@ -2920,8 +2997,8 @@ if __name__ == '__main__':
+                 logging.warning('TLDS: NO TLDs from \"{0}\"'.format(config['tld_url']))
+                 config['check_tld'] = False
+ 
+-        wl_dom, wl_ip4, wl_ip6, wl_rx, ul_dom, ul_ip4, ul_ip6, wl_geo = read_list(config['whitelist'], 'WhiteList', wl_dom, wl_ip4, wl_ip6, wl_rx, ul_dom, ul_ip4, ul_ip6, wl_geo)
+-        bl_dom, bl_ip4, bl_ip6, bl_rx, _, _, _, bl_geo = read_list(config['blacklist'], 'BlackList', bl_dom, bl_ip4, bl_ip6, bl_rx, dict(), dict(), dict(), bl_geo)
++        wl_dom, wl_ip4, wl_ip6, wl_rx, ul_dom, ul_ip4, ul_ip6, wl_geo, alias, forwarder, forcettl = read_list(config['whitelist'], 'WhiteList', wl_dom, wl_ip4, wl_ip6, wl_rx, ul_dom, ul_ip4, ul_ip6, wl_geo, alias, forwarder, forcettl)
++        bl_dom, bl_ip4, bl_ip6, bl_rx, _, _, _, bl_geo, _, _, _ = read_list(config['blacklist'], 'BlackList', bl_dom, bl_ip4, bl_ip6, bl_rx, dict(), dict(), dict(), bl_geo, dict(), dict(), dict())
+ 
+         if config['unfilter_whitelist']:
+             ul_dom = add_list(ul_dom, wl_dom.keys(), 'UNFILTER-WHITELIST')
+@@ -2953,7 +3030,7 @@ if __name__ == '__main__':
+         private6['fe80::/10'] = 'Private'
+ 
+         for addr in config['private_addrs']:
+-            if addr.find(':') > 0:
++            if addr.find(':') > -1:
+                 if addr not in private6:
+                     private6[addr] = 'Private'
+             else:
+@@ -3011,8 +3088,7 @@ if __name__ == '__main__':
+         logging.info('ABUSEIPDB: API-Key = {0}'.format(config['abuseipdbkey']))
+ 
+     # Setup requests sessions
+-    #requests_session = requests.Session()
+-    #requests_session.mount('https://', HTTP20Adapter())
++    requests_session = requests.Session()
+     #abuseipdb_session = requests.Session()
+ 
+     # Geo-IP
+@@ -3023,7 +3099,7 @@ if __name__ == '__main__':
+     run_server()
+ 
+     # Terminate
+-    #requests_session.close()
++    requests_session.close()
+     #abuseipdb_session.close()
+     geoip.close()
+  
+diff --git a/requirements.txt b/requirements.txt
+index 154fcff..6a861f6 100644
+--- a/requirements.txt
++++ b/requirements.txt
+@@ -6,6 +6,7 @@ geoip2>=2.9.0
+ hyper>=0.7.0
+ idna>=2.8
+ IPy>=1.0
++#pygtrie>=2.3.3         
+ python-hosts>=0.4.7         
+ pytricia>=1.0.0
+ regex>=2019.6.8

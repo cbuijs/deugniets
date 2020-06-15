@@ -1,0 +1,53 @@
+diff --git a/deugniets.py b/deugniets.py
+index 9c89884..615e59a 100644
+--- a/deugniets.py
++++ b/deugniets.py
+@@ -1,7 +1,7 @@
+ #!/usr/bin/env python3
+ '''
+ ===========================================================================
+- deugniets.py v2.76-20200308 Copyright 2019-2020 by cbuijs@chrisbuijs.com
++ deugniets.py v2.762-20200309 Copyright 2019-2020 by cbuijs@chrisbuijs.com
+ ===========================================================================
+ 
+  Based on: https://github.com/supriyo-biswas/adblock-dns-server
+@@ -1218,6 +1218,7 @@ def collapse(name, answer, qid):
+             newaddrs = list()
+ 
+             for rrset in answer:
++                rrname = str(rrset.name)
+                 beforecount += len(rrset)
+                 if rrset.rdtype in (1, 28): # A and AAAA
+                     aftercount += len(rrset)
+@@ -1231,10 +1232,12 @@ def collapse(name, answer, qid):
+                     for r in list(map(str, rrset)):
+                         removed -= 1
+                         if config['log_collapse'] and config['log_verbose']:
+-                            logging.info('COLLAPSE [{0}]: removed domain \"{1}\" ({2})'.format(qid, r, removed))
++                            logging.info('COLLAPSE [{0}]: Removed CNAME \"{1}\" -> \"{2}\" ({3})'.format(qid, rrname, r, removed))
+ 
+             if new_answer:
+                 if config['log_collapse']:
++                    if config['log_verbose']:
++                        logging.info('COLLAPSE [{0}]: New \"{1}\" -> {2} ({3})'.format(qid, name, ', '.join(newaddrs), len(newaddrs)))
+                     logging.info('COLLAPSE [{0}]: \"{1}\" went from {2} to {3} RRs ({4})'.format(qid, name, beforecount, aftercount, removed))
+ 
+                 return new_answer
+@@ -1834,7 +1837,8 @@ def dns_query(name, rdclass, rdtype, qid, cip, unfilter, fttl):
+ 
+             # Cache it
+             if config['log_caching']:
+-                logging.info('CACHED [{0}]: {1} = {2} - RR:{3} - TTL:{4} - {5}'.format(qid, cachename, dns.rcode.to_text(rcode), countrv(rv), ttl, returnstatus))
++                #logging.info('CACHED [{0}]: {1} = {2} - RR:{3} - TTL:{4} - {5}'.format(qid, cachename, dns.rcode.to_text(rcode), countrv(rv), ttl, returnstatus))
++                log_helper(qname, rdtype, (rv[0], rv[1], rv[2], rv[3]), 'RESPONSE-TO-CACHE', qid)
+             cache.add(obj=CachedObject(name=cachename, obj=rv + (returnstatus,), ttl=ttl))
+ 
+     else:
+@@ -2325,6 +2329,7 @@ def handle_query(raw_data, client_ip):
+         result = dns_query(name, rdclass, rdtype, query.id, cip, unfilter, False)
+ 
+     if config['min_resp'] and result[0] == 0:
++        logging.info('MINIMAL-RESPONSE [{0}]: {1} - Removed Authoritative/Additional'.format(query.id, queryname))
+         result = (result[0], result[1], [], [])
+ 
+     response = make_response(query)

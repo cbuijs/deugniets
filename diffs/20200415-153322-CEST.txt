@@ -1,0 +1,85 @@
+diff --git a/deugniets.py b/deugniets.py
+index 436ccd4..68777e2 100644
+--- a/deugniets.py
++++ b/deugniets.py
+@@ -1,7 +1,7 @@
+ #!/usr/bin/env python3
+ '''
+ ===========================================================================
+- deugniets.py v2.8-20200409 Copyright 2019-2020 by cbuijs@chrisbuijs.com
++ deugniets.py v2.821-20200415 Copyright 2019-2020 by cbuijs@chrisbuijs.com
+ ===========================================================================
+ 
+  Based on: https://github.com/supriyo-biswas/adblock-dns-server
+@@ -1043,14 +1043,13 @@ def check_rx(valuetype, testvalue, rxlst, rxbiglst, tag):
+ 
+ def check_dom(valuetype, testvalue, domlist, listname, onlyparent, smart):
+     '''Match domain against list, works for subdomains too'''
+-    #logging.debug('{0}-CHECK-DOM [{1}]: {2}'.format(valuetype, listname, testvalue))
+     cachename = 'DOM#{0}#{1}#{2}'.format(listname or 'NONE', valuetype, testvalue)
+     if cachename in check_cache:
+         result = check_cache.get(cachename, False)
+         #logging.info('{0}-CACHE-CHECKDOM-HIT [{1}]: \"{2}\" = \"{3}\" ({4})'.format(valuetype, listname or 'NONE', testvalue, result or 'NOT-LISTED', cachename))
+         return result
+ 
+-    if testvalue in domlist:
++    if onlyparent is not True and testvalue in domlist:
+         if config['log_hits'] and listname:
+             logging.warning('{0}-DOM-HIT [{1}]: \"{2}\"'.format(valuetype, listname, testvalue))
+         check_cache[cachename] = testvalue
+@@ -1065,7 +1064,7 @@ def check_dom(valuetype, testvalue, domlist, listname, onlyparent, smart):
+         valuetest = testvalue.rstrip('.')
+         while valuetest.count('.') > 1:
+             valuetest = '.'.join(valuetest.split('.')[:-1])
+-            fqdn = check_dom_walk(valuetype, valuetest + '.', domlist, False, onlyparent)
++            fqdn = check_dom_walk(valuetype, '{0}.'.format(valuetest), domlist, False, onlyparent)
+             if fqdn and fqdn.count('.') > 1:
+                 if config['log_hits'] and listname:
+                     logging.warning('{0}-SMARTDOM-HIT [{1}]: \"{2}\" -> \"{3}\"'.format(valuetype, listname, testvalue, fqdn))
+@@ -1077,10 +1076,10 @@ def check_dom(valuetype, testvalue, domlist, listname, onlyparent, smart):
+ 
+ 
+ def check_dom_walk(valuetype, testvalue, domlist, listname, onlyparent):
+-    #logging.debug('{0}-CHECK-DOMWALK [{1}]: {2}'.format(valuetype, listname, testvalue))
+     fqdn = ''
+     for label in filter(None, testvalue.strip('.').split('.')[::-1]):
+         fqdn = '{0}.{1}'.format(label, fqdn.lstrip('.'))
++        #logging.debug('{0}-DOMWALK [{1}]: \"{2}\" -> \"{3}\"'.format(valuetype, listname, testvalue, fqdn))
+         if onlyparent and fqdn == testvalue:
+             return False
+ 
+@@ -1377,7 +1376,7 @@ def dns_query(name, rdclass, rdtype, qid, cip, unfilter, fttl):
+     elif cip == 'SPOOFER':
+         unfilter = True
+ 
+-    if unfilter:
++    if unfilter or config['smartip']:
+         #fttl = config['unfilter_ttl']
+         cachename = '{0}/{1}'.format(cachename, cip)
+ 
+@@ -2060,6 +2059,8 @@ def dox_request(qid, qname, rdtype, cachename, urls, rfc8484, cip):
+                 #    elif rcode in (401, 403):
+                 #        return None, dns.rcode.REFUSED
+ 
++                #    else:
++                #        return None, dns.rcode.SERVFAIL
+ 
+                 # TLS
+                 elif url.startswith('tls://'): # Port 853
+@@ -2404,7 +2405,6 @@ def handle_query(raw_data, client_ip):
+         else:
+             result = (result[0], [], result[2], [])
+ 
+-
+     response = make_our_response(query)
+     response.set_rcode(result[0]) or dns.rcode.SERVFAIL
+     response.answer = result[1] or []
+@@ -2413,7 +2413,7 @@ def handle_query(raw_data, client_ip):
+ 
+     #logging.debug('RESPONSE-FLAGS-TO-CLIENT [{0}]: {1}'.format(query.id, dns.flags.to_text(response.flags)))
+ 
+-    log_helper(name, dns.rdatatype.to_text(rdtype), (result[0], result[1], result[2], result[3], status), 'RESPONSE-TO-CLIENT', query.id)
++    log_helper(name, rdtypet, (result[0], result[1], result[2], result[3], status), 'RESPONSE-TO-CLIENT ({0})'.format(cip), query.id)
+ 
+     beingchecked.discard(bname)
+ 

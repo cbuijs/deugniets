@@ -1,0 +1,175 @@
+diff --git a/deugniets.py b/deugniets.py
+index 7465bc0..7ce8a61 100644
+--- a/deugniets.py
++++ b/deugniets.py
+@@ -1,7 +1,7 @@
+ #!/usr/bin/env python3
+ '''
+ =======================================================================
+- deugniets.py v2.631-20191216 Copyright 2019 by cbuijs@chrisbuijs.com
++ deugniets.py v2.633-20191216 Copyright 2019 by cbuijs@chrisbuijs.com
+ =======================================================================
+ 
+  Based on: https://github.com/supriyo-biswas/adblock-dns-server
+@@ -10,6 +10,9 @@
+            https://www.reddit.com/r/Python/comments/2uik3q/expiring_inmemory_cache_module/
+            https://www.bortzmeyer.org/hackathon-ietf-101.html
+ 
++  This product includes the use GeoLite2 data created by MaxMind, available from
++           https://www.maxmind.com
++
+  ToDo:
+ 
+  - Fix listening/response IP when responding (same IP out as in), IPv6
+@@ -18,6 +21,7 @@
+  - Ability to disable resolution of aliases/spoofs
+  - Filter out CNAME's with no resulting address(es)A
+  - Alias based on regex
++ - Ellaborate GEO to have combinations of City/Area/Country/Continent
+ 
+ =====================================================================
+ '''
+@@ -125,6 +129,9 @@ command_acl4['127.0.0.1/32'] = True
+ command_acl4['192.168.0.0/16'] = True
+ command_acl6['0::1/128'] = True
+ 
++private4 = pytricia.PyTricia(32, socket.AF_INET)
++private6 = pytricia.PyTricia(128, socket.AF_INET6)
++
+ # vars
+ dummy = '#!#!DUMMY!#!#'
+ 
+@@ -176,7 +183,7 @@ is_dox4 = regex.compile('^(dn|http|tl)s://(do[ht]|ip(v)*)4\..*$', regex.I)
+ is_dox6 = regex.compile('^(dn|http|tl)s://(do[ht]|ip(v)*)6\..*$', regex.I)
+ 
+ # GEO
+-is_geo = regex.compile('^@.*$', regex.I)
++is_geo = regex.compile('^@[a-z/\s]+$', regex.I)
+ 
+ #####################################################################
+ 
+@@ -416,7 +423,7 @@ def read_list(filenames, listname, domlst, ip4lst, ip6lst, rxlst, unlst, unip4,
+ 
+                     elif (config['filter_request'] or config['filter_response']) and is_geo.search(entry):
+                         entry = entry.lstrip('@')
+-                        geolst[entry.upper()] = entry
++                        geolst[regex.sub('\s+', '', entry.upper())] = entry
+ 
+                     elif is_alias.search(entry):
+                         datatype = False
+@@ -1042,22 +1049,22 @@ def check_geo(valuetype, testvalue, geolst, listname):
+             if gip.city.name and gip.city.name.upper() in geolst:
+                 if config['log_hits'] and listname:
+                     logging.warning('{0}-GEO-CITY-HIT [{1}]: {2} -> {3}'.format(valuetype, listname, testvalue, gip.city.name.upper()))
+-                    return True
++                return True
+ 
+             if gip.subdivisions.most_specific.name and gip.subdivisions.most_specific.name.upper() in geolst:
+                 if config['log_hits'] and listname:
+                     logging.warning('{0}-GEO-AREA-HIT [{1}]: {2} -> {3}'.format(valuetype, listname, testvalue, gip.subdivisions.most_specific.name.upper()))
+-                    return True
++                return True
+ 
+             if gip.country.name and gip.country.name.upper() in geolst:
+                 if config['log_hits'] and listname:
+                     logging.warning('{0}-GEO-COUNTRY-HIT [{1}]: {2} -> {3}'.format(valuetype, listname, testvalue, gip.country.name.upper()))
+-                    return True
++                return True
+ 
+             if gip.continent.name and gip.continent.name.upper() in geolst:
+                 if config['log_hits'] and listname:
+                     logging.warning('{0}-GEO-CONTINENT-HIT [{1}]: {2} -> {3}'.format(valuetype, listname, testvalue, gip.continent.name.upper()))
+-                    return True
++                return True
+ 
+     return False
+ 
+@@ -1071,11 +1078,11 @@ def check_badip(cip):
+     count = 0
+     while count < config['retry_count'] and cip in beingchecked:
+         count += 1
+-        logging.debug('{0}-BADIP-SLEEP: {1} (#{2})'.format(valuetype, cip, count))
++        logging.debug('BADIP-SLEEP: {0} (#{1})'.format(cip, count))
+         time.sleep(config['retry_wait'])
+ 
+     if count >= config['retry_count']:
+-        logging.error('{0}-BADIP-FAIL: {1} - Took to long to check'.format(valuetype, cip, count))
++        logging.error('BADIP-FAIL: {0} - Took to long to check'.format(cip))
+         return False
+ 
+     beingchecked.add(cip)
+@@ -1084,11 +1091,13 @@ def check_badip(cip):
+         if cip.find(':') > 0:
+             wl_ip = wl_ip6
+             bl_ip = bl_ip6
++            private = private6
+         else:
+             wl_ip = wl_ip4
+             bl_ip = bl_ip4
++            private = private4
+     
+-        if cip in wl_ip:
++        if (cip in private) or (cip in wl_ip):
+             #if config['log_hits']:
+                 #logging.debug('ACL-WHITELIST-HIT: Client {0} -> {1}'.format(cip, wl_ip.get_key(cip)))
+             beingchecked.discard(cip)
+@@ -2070,13 +2079,24 @@ def make_response(query):
+ 
+ def geo(client_ip):
+     cip = str(client_ip)
++    ip6 = False
+     if config['geodb'] and is_ip.search(cip):
+-        try:
+-            gip = geoip.city(cip)
+-            if gip:
+-                return '{0}/{1}/{2}/{3}'.format(gip.city.name or '-', gip.subdivisions.most_specific.name or '-', gip.country.name or '-', gip.continent.name or '-')
+-        except:
+-            pass
++        if cip.find(':') > 0:
++            ip6 = True
++
++        if cip in ('127.0.0.1', '::1'):
++            return '-/-/-/LocalHost'
++
++        elif (ip6 is False and cip in private4) or (ip6 is True and cip in private6):
++            return '-/-/-/Private'
++
++        else:
++            try:
++                gip = geoip.city(cip)
++                if gip:
++                    return '{0}/{1}/{2}/{3}'.format(gip.city.name or '-', gip.subdivisions.most_specific.name or '-', gip.country.name or '-', gip.continent.name or '-')
++            except:
++                pass
+ 
+     return '-/-/-/-'
+ 
+@@ -2537,15 +2557,21 @@ if __name__ == '__main__':
+             sys.exit(1)
+ 
+         # Whitelist Local/Private IPv4's
+-        wl_ip4['127.0.0.0/8'] = 'Private'
+-        wl_ip4['10.0.0.0/8'] = 'Private'
+-        wl_ip4['172.16.0.0/12'] = 'Private'
+-        wl_ip4['192.168.0.0/16'] = 'Private'
++        private4['127.0.0.0/8'] = 'Private'
++        private4['10.0.0.0/8'] = 'Private'
++        private4['172.16.0.0/12'] = 'Private'
++        private4['192.168.0.0/16'] = 'Private'
+ 
+         # Whitelist Local/Private IPv4's
+-        wl_ip6['::1/128'] = 'Private'
+-        wl_ip6['fc00::/7'] = 'Private'
+-        wl_ip6['fe80::/10'] = 'Private'
++        private6['::1/128'] = 'Private'
++        private6['fc00::/7'] = 'Private'
++        private6['fe80::/10'] = 'Private'
++
++        for ip in private4:
++            wl_ip4[ip] = private4[ip]
++
++        for ip in private6:
++            wl_ip6[ip] = private6[ip]
+ 
+         if config['optimize']:
+             wl_dom = undom(wl_dom, wl_dom, 'WHITELIST-WHITELIST', True)

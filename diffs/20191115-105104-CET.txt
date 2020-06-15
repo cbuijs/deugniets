@@ -1,0 +1,24 @@
+diff --git a/deugniets.py b/deugniets.py
+index 305d628..bc4ff36 100644
+--- a/deugniets.py
++++ b/deugniets.py
+@@ -1639,7 +1639,9 @@ def dox_request(qid, qname, rdtype, cachename, urls, rfc8484, cip):
+             if url:
+                 retries += 1
+ 
+-                # DOH
++                # DOH !!! This might get replaced with dnspython query.https/query.doh (see query.tls) when it comes out
++                # https://github.com/rthalley/dnspython/pull/393
++                # https://github.com/rthalley/dnspython/issues/358
+                 if url.startswith('https://'):
+                     message.id = 0 # DoH requests this
+                     rcode = 500
+@@ -2090,6 +2092,8 @@ def run_server():
+             for ip in ips:
+                 newentry = 'tls://{0}#{1}'.format(hostname, ip)
+                 newnameservers.append(newentry)
++        else:
++            newnameservers.append(dnsserver)
+ 
+     if newnameservers:
+         config['nameservers'] = newnameservers

@@ -1,0 +1,430 @@
+diff --git a/deugniets.py b/deugniets.py
+index c9df9ba..8d5862d 100644
+--- a/deugniets.py
++++ b/deugniets.py
+@@ -1,7 +1,7 @@
+ #!/usr/bin/env python3
+ '''
+ ===========================================================================
+- deugniets.py v2.79-20200404 Copyright 2019-2020 by cbuijs@chrisbuijs.com
++ deugniets.py v2.796-20200406 Copyright 2019-2020 by cbuijs@chrisbuijs.com
+ ===========================================================================
+ 
+  Based on: https://github.com/supriyo-biswas/adblock-dns-server
+@@ -106,6 +106,9 @@ import base64
+ # GeoIP
+ import geoip2.database
+ 
++# CacheTools
++from cachetools import LRUCache
++
+ # Cache
+ # https://github.com/dnaeon/py-vconnector/blob/master/src/vconnector/cache.py
+ # https://www.reddit.com/r/Python/comments/2uik3q/expiring_inmemory_cache_module/
+@@ -113,9 +116,11 @@ from cache import CachedObject, CacheInventory
+ 
+ # Initialize caches
+ cache = CacheInventory(maxsize=65535, housekeeping=60, name='DNS-Cache')
+-#listed_cache = CacheInventory(maxsize=16384, housekeeping=60, name='Label-Cache')
+ unfilter_cache = CacheInventory(maxsize=512, housekeeping=60, name='UnFilter')
+-geo_cache = CacheInventory(maxsize=8192, housekeeping=60, name='GEO-Cache')
++
++geo_cache = LRUCache(maxsize=8192)
++check_cache = LRUCache(maxsize=8192)
++queryhits = LRUCache(maxsize=8192)
+ 
+ # Lists
+ wl_dom = dict()
+@@ -136,7 +141,11 @@ beingspoofed = set()
+ ul_dom = dict()
+ ul_ip4 = pytricia.PyTricia(32, socket.AF_INET)
+ ul_ip6 = pytricia.PyTricia(128, socket.AF_INET6)
+-queryhits = dict()
++
++blacklisted_state = dict()
++blacklisted_state[True] = 'BLACKLISTED'
++blacklisted_state[False] = 'WHITELISTED'
++blacklisted_state[None] = 'NOT-LISTED'
+ 
+ command_acl4 = pytricia.PyTricia(32, socket.AF_INET)
+ command_acl6 = pytricia.PyTricia(128, socket.AF_INET6)
+@@ -784,16 +793,23 @@ def is_blacklisted(value, valuetype, checkip):
+     if not checkip:
+         testvalue = regex.split('\s+', str(value))[-1].lower() # Get last value
+ 
++    cachename = 'BLACKLISTED#{0}#{1}'.format(valuetype, value)
++    if cachename in check_cache:
++        result = check_cache.get(cachename, None)
++        #logging.info('{0}-CACHE-BLACKLISTED-HIT: \"{1}\" = {2} ({3})'.format(valuetype, value, blacklisted_state.get(result, 'UNKNOWN'), cachename))
++        return result
++
+     #logging.debug('{0}-BLACKLIST-CHECK: {1}'.format(valuetype, testvalue))
+ 
+     count = 0
+-    while count < config['retry_count'] and testvalue in beingchecked: # and (testvalue not in listed_cache):
++    while count < config['retry_count'] and testvalue in beingchecked:
+         count += 1
+         #logging.debug('{0}-BLACKLIST-SLEEP: {1} (#{2})'.format(valuetype, testvalue, count))
+         time.sleep(config['retry_wait'])
+ 
+     if count >= config['retry_count']:
+         logging.error('{0}-BLACKLIST-FAIL: {1} - Took to long to check'.format(valuetype, testvalue, count))
++        check_cache[cachename] = None
+         return None
+ 
+     beingchecked.add(testvalue)
+@@ -804,6 +820,7 @@ def is_blacklisted(value, valuetype, checkip):
+ 
+     beingchecked.discard(testvalue)
+ 
++    check_cache[cachename] = result
+     return result
+ 
+ 
+@@ -866,6 +883,13 @@ def check_blacklisted(testvalue, valuetype, checkip):
+             testvalue = ip
+ 
+     if checkip:
++        # Check against GEO
++        if check_geo(valuetype, testvalue, wl_geo, 'WHITELIST'):
++            return False
++
++        if check_geo(valuetype, testvalue, bl_geo, 'BLACKLIST'):
++            return True
++  
+         ip4 = True
+         if testvalue.find(':') > 0:
+             ip4 = False
+@@ -899,13 +923,6 @@ def check_blacklisted(testvalue, valuetype, checkip):
+                 else:
+                     return True
+ 
+-        # Check against GEO
+-        if check_geo(valuetype, testvalue, wl_geo, 'WHITELIST'):
+-            return False
+-
+-        if check_geo(valuetype, testvalue, bl_geo, 'BLACKLIST'):
+-            return True
+-  
+         # !!! Goes fast and uses up quota
+         #if check_badip(testvalue):
+         #    return True
+@@ -959,6 +976,7 @@ def check_rx(valuetype, testvalue, rxlst, rxbiglst, tag):
+     '''Match value against regex'''
+     if config['use_regex']:
+         #logging.debug('{0}-CHECK-RX: {1}'.format(valuetype, testvalue))
++
+         if config['use_quick_regex']:
+             match = rxbiglst.search(testvalue) or rxbiglst.search(testvalue.rstrip('.')) # Traling dot is optional when doing regex to make it easier
+             if match:
+@@ -976,17 +994,24 @@ def check_rx(valuetype, testvalue, rxlst, rxbiglst, tag):
+ 
+     return False
+ 
+-
+ def check_dom(valuetype, testvalue, domlist, listname, onlyparent, smart):
+     '''Match domain against list, works for subdomains too'''
+     #logging.debug('{0}-CHECK-DOM [{1}]: {2}'.format(valuetype, listname, testvalue))
++    cachename = 'DOM#{0}#{1}#{2}'.format(listname or 'NONE', valuetype, testvalue)
++    if cachename in check_cache:
++        result = check_cache.get(cachename, False)
++        #logging.info('{0}-CACHE-CHECKDOM-HIT [{1}]: \"{2}\" = \"{3}\" ({4})'.format(valuetype, listname or 'NONE', testvalue, result or 'NOT-LISTED', cachename))
++        return result
++
+     if testvalue in domlist:
+         if config['log_hits'] and listname:
+-            logging.warning('{0}-DOM-HIT [{1}]: \"{2}\" -> \"{2}\"'.format(valuetype, listname, testvalue))
++            logging.warning('{0}-DOM-HIT [{1}]: \"{2}\"'.format(valuetype, listname, testvalue))
++        check_cache[cachename] = testvalue
+         return testvalue
+ 
+     fqdn = check_dom_walk(valuetype, testvalue, domlist, listname, onlyparent)
+     if fqdn:
++        check_cache[cachename] = fqdn
+         return fqdn
+ 
+     if smart:
+@@ -998,7 +1023,9 @@ def check_dom(valuetype, testvalue, domlist, listname, onlyparent, smart):
+                 if config['log_hits'] and listname:
+                     logging.warning('{0}-SMARTDOM-HIT [{1}]: \"{2}\" -> \"{3}\"'.format(valuetype, listname, testvalue, fqdn))
+                 return fqdn
++                check_cache[cachename] = fqdn
+ 
++    check_cache[cachename] = False
+     return False
+ 
+ 
+@@ -1006,7 +1033,7 @@ def check_dom_walk(valuetype, testvalue, domlist, listname, onlyparent):
+     #logging.debug('{0}-CHECK-DOMWALK [{1}]: {2}'.format(valuetype, listname, testvalue))
+     fqdn = ''
+     for label in filter(None, testvalue.strip('.').split('.')[::-1]):
+-        fqdn = '{0}.{1}'.format(label, fqdn)
++        fqdn = '{0}.{1}'.format(label, fqdn.lstrip('.'))
+         if onlyparent and fqdn == testvalue:
+             return False
+ 
+@@ -1040,13 +1067,6 @@ def check_ip(valuetype, testvalue, orgtestvalue, iplist, listname, rc):
+         if config['log_hits'] and listname:
+             logging.warning('{0}-IP-HIT [{1}]: {2} -> {3}'.format(valuetype, listname, orgtestvalue, iplist.get_key(testvalue)))
+ 
+-        #if testvalue == orgtestvalue:
+-        #    listed_cache.add(obj=CachedObject(name=testvalue, obj=rc, ttl=config['blacklist_cache_ttl']))
+-        #else:
+-        #    if listname:
+-        #        logging.debug('{0}-IP-HIT-ADD-ARPA [{1}]: {2} -> {3}'.format(valuetype, listname, testvalue, orgtestvalue))
+-        #    listed_cache.add(obj=CachedObject(name=orgtestvalue, obj=rc, ttl=config['blacklist_cache_ttl']))
+-
+         return rc
+ 
+     return False
+@@ -1061,22 +1081,22 @@ def check_geo(valuetype, testvalue, geolst, listname):
+ 
+             # !!! Make nicer/quicker
+             if continent in geolst:
+-                if config['log_hits'] and listname:
++                if config['log_hits'] and config['log_verbose'] and listname:
+                     logging.warning('{0}-GEO-CONTINENT-HIT [{1}]: {2} -> {3}'.format(valuetype, listname, testvalue, continent))
+                 return True
+ 
+             if country in geolst:
+-                if config['log_hits'] and listname:
++                if config['log_hits'] and config['log_verbose'] and listname:
+                     logging.warning('{0}-GEO-COUNTRY-HIT [{1}]: {2} -> {3}'.format(valuetype, listname, testvalue, country))
+                 return True
+ 
+             if area in geolst:
+-                if config['log_hits'] and listname:
++                if config['log_hits'] and config['log_verbose'] and listname:
+                     logging.warning('{0}-GEO-AREA-HIT [{1}]: {2} -> {3}'.format(valuetype, listname, testvalue, area))
+                 return True
+ 
+             if city in geolst:
+-                if config['log_hits'] and listname:
++                if config['log_hits'] and config['log_verbose'] and listname:
+                     logging.warning('{0}-GEO-CITY-HIT [{1}]: {2} -> {3}'.format(valuetype, listname, testvalue, city))
+                 return True
+ 
+@@ -1275,7 +1295,7 @@ def dnsl_check(dnsl, value, isip):
+ 
+                     elif rcode == 3: # NXDOMAIN
+                         if config['log_responses']:
+-                            logging.info('DNSL-CHECK-{0}-RESPONSE [{2}] {3} = NOTLISTED on {1}'.format(tag, servicename, qid, value))
++                            logging.info('DNSL-CHECK-{0}-RESPONSE [{2}] {3} = NOT-LISTED on {1}'.format(tag, servicename, qid, value))
+ 
+                     else:
+                         logging.error('DNSL-CHECK-{0}-RESPONSE [{2}] {3} = ERROR - {4} - {5} using {1}'.format(tag, servicename, qid, value, rcode, response))
+@@ -1424,36 +1444,40 @@ def dns_query(name, rdclass, rdtype, qid, cip, unfilter, fttl):
+             expires = obj.timestamp + obj.ttl
+             left = int(expires - time.time())
+             if left > 0:
+-                result = update_ttls(result, left)
+                 if gcachename == cachename:
++                    result = update_ttls(result, left)
+                     if config['log_caching'] and config['log_hits'] and is_ip.search(cip):
+-                        logging.info('CACHE-HIT [{0}]: {1} = {2} (TTL-LEFT:{3}) - {4}'.format(qid, cachename, dns.rcode.to_text(result[0]), left, result[4]))
++                        #logging.info('CACHE-HIT [{0}]: {1} = {2} (TTL-LEFT:{3}) - {4}'.format(qid, cachename, dns.rcode.to_text(result[0]), left, result[4]))
+                         log_helper(qname, qrdtype, result, 'RESPONSE-FROM-CACHE', qid)
+-                    return (result[0], result[1], result[2], result[3])
++                    return (result[0], result[1], result[2], result[3], result[4])
++
++                elif config['parent_cache_hit']:
++                    if result[0] != 0: # Parent cache not NOERROR
++                        newresult = (result[0], [], result[2], [], result[4])
++                        if config['log_caching'] and config['log_hits'] and is_ip.search(cip):
++                            #logging.info('PARENT-CACHE-HIT [{0}]: {1} = {2} = {3} (TTL-LEFT:{4}) - {5}'.format(qid, cachename, gcachename, dns.rcode.to_text(result[0]), left, result[4]))
++                            log_helper(qname, qrdtype, newresult, 'RESPONSE-FROM-PARENT-CACHE', qid)
++                        cache.add(obj=CachedObject(name=cachename, obj=newresult, ttl=left))
++                        return (newresult[0], [], newresult[2], [], newresult[4])
++
++                    elif config['redirect_ip'] and len(result[1]) > 0: # parent cache redirect ip
++                        for rrset in result[1]:
++                            if rrset.rdtype in (1, 28): # Only A and AAAA
++                                for rr in rrset:   
++                                    if hasattr(rr, 'address'):
++                                        target = str(rr.address)
++                                        if target in config['redirect_ip']:
++                                            if config['log_caching'] and config['log_hits'] and is_ip.search(cip):
++                                                #logging.info('PARENT-CACHE-HIT [{0}]: {1} = {2} = {3} (TTL-LEFT:{4}) - {5}'.format(qid, cachename, gcachename, target, left, result[4]))
++                                                log_helper(qname, qrdtype, result, 'RESPONSE-FROM-PARENT-CACHE', qid)
++                                            cache.add(obj=CachedObject(name=cachename, obj=result, ttl=left))
++                                            return (result[0], result[1], result[2], result[3], result[4])
++                else: # No parent check
++                    break
++
++            else: # Found but expired
++                break
+ 
+-                elif result[0] != 0: # Parent cache not NOERROR
+-                    newresult = (result[0], [], result[2], [], result[4])
+-                    if config['log_caching'] and config['log_hits'] and is_ip.search(cip):
+-                        logging.info('PARENT-CACHE-HIT [{0}]: {1} = {2} = {3} (TTL-LEFT:{4}) - {5}'.format(qid, cachename, gcachename, dns.rcode.to_text(result[0]), left, result[4]))
+-                        log_helper(qname, qrdtype, newresult, 'RESPONSE-FROM-PARENT-CACHE', qid)
+-                    cache.add(obj=CachedObject(name=cachename, obj=newresult, ttl=left))
+-                    return (newresult[0], [], newresult[2], [])
+-
+-                elif result[0] == 0 and config['redirect_ip'] and len(result[1]) > 0: # parent cache redirect ip
+-                    for rrset in result[1]:
+-                        if rrset.rdtype in (1, 28): # Only A and AAAA
+-                            for rr in rrset:   
+-                                if hasattr(rr, 'address'):
+-                                    target = str(rr.address)
+-                                    if target in config['redirect_ip']:
+-                                        if config['log_caching'] and config['log_hits'] and is_ip.search(cip):
+-                                            logging.info('PARENT-CACHE-HIT [{0}]: {1} = {2} = {3} (TTL-LEFT:{4}) - {5}'.format(qid, cachename, gcachename, target, left, result[4]))
+-                                            log_helper(qname, qrdtype, result, 'RESPONSE-FROM-PARENT-CACHE', qid)
+-                                        cache.add(obj=CachedObject(name=cachename, obj=result, ttl=left))
+-                                        return (result[0], result[1], result[2], result[3])
+-
+-        if config['parent_cache_hit'] is not True:
+-            break
+ 
+     matchf = check_dom('NAME', qname, forwarder, 'FORWARDER', False, False)
+     if rv is None and config['filtering'] and config['filter_request'] and unfilter is False and matchf is False:
+@@ -1679,7 +1703,11 @@ def dns_query(name, rdclass, rdtype, qid, cip, unfilter, fttl):
+                                                     if config['remove_ip'] and rdtype in ('A', 'AAAA'): # Remove IP from answer instead of blocking whole
+                                                         rrset.remove(rr)
+                                                         rrcount = len(rrset)
+-                                                        logging.warning('REMOVED-IP: {0} ({1}) from \"{2}\" ({3} RRs left)'.format(target, geo(target), rrname, rrcount))
++                                                        if qname == rrname:
++                                                            logging.warning('REMOVED-IP: {0} ({1}) from \"{2}\" ({3} RRs left)'.format(target, geo(target), rrname, rrcount))
++                                                        else:
++                                                            logging.warning('REMOVED-IP: {0} ({1}) from \"{2}\" -> \"{3}\" ({4} RRs left)'.format(target, geo(target), qname, rrname, rrcount))
++
+                                                         if rrcount == 0:
+                                                             status = True
+                                                             returnstatus = 'BLACKLISTED'
+@@ -1797,13 +1825,13 @@ def dns_query(name, rdclass, rdtype, qid, cip, unfilter, fttl):
+ 
+             # Cache it
+             if config['log_caching']:
+-                log_helper(qname, rdtype, (rv[0], rv[1], rv[2], rv[3]), 'RESPONSE-TO-CACHE', qid)
++                log_helper(qname, rdtype, (rv[0], rv[1], rv[2], rv[3], returnstatus), 'RESPONSE-TO-CACHE', qid)
+             cache.add(obj=CachedObject(name=cachename, obj=rv + (returnstatus,), ttl=ttl))
+ 
+     else:
+         rv = (dns.rcode.SERVFAIL, [], [], [])
+ 
+-    return rv
++    return (rv[0], rv[1], rv[2], rv[3], returnstatus)
+ 
+ 
+ def countrv(rv):
+@@ -2036,14 +2064,14 @@ def dox_request(qid, qname, rdtype, cachename, urls, rfc8484, cip):
+ 
+ def clear_caches():
+     cache.clear()
+-    #listed_cache.clear()
+     unfilter_cache.clear()
+     queryhits.clear()
++    check_cache.clear()
++    geo_cache.clear()
+     gc.collect() # Collect garbage
+     return True
+ 
+ 
+-
+ def countrr(rrsets):
+     num = 0
+     for rrset in rrsets:
+@@ -2116,7 +2144,20 @@ def log_helper(qname, qrdtype, result, tag, qid):
+ 
+             return True
+ 
+-    logging.info('{0} [{1}]: {2}/IN/{3} = {4} ({5} RRs)'.format(tag, qid, qname, qrdtype, rcode, countrv(result)))
++
++    status = 'NORMAL'
++    if len(result) > 4:
++        status = result[4]
++
++    ttl = 0
++    if result[1]:
++        ttl = result[1][-1].ttl
++    elif result[2]:
++        ttl = result[2][-1].ttl
++    elif result[3]:
++        ttl = result[3][-1].ttl
++
++    logging.info('{0} [{1}]: {2}/IN/{3} = {4} - {5} RRs - TTL:{6} - {7}'.format(tag, qid, qname, qrdtype, rcode, countrv(result), ttl, status))
+ 
+     return True
+ 
+@@ -2129,6 +2170,7 @@ def log_response(qname, qtype, answer, rcode, tag, spoofedname, qid):
+         count = 0
+         rrsetcounttotal = len(answer)
+         rrsetcount = 0
++
+         if answer:
+             for rrset in answer:
+                 rrsetcount += 1
+@@ -2171,7 +2213,7 @@ def geo(client_ip):
+     if cip.find(':') > 0:
+         ip6 = True
+ 
+-    response = geo_cache.get(cip)
++    response = geo_cache.get(cip, None)
+     if response:
+         return response
+ 
+@@ -2198,7 +2240,7 @@ def geo(client_ip):
+     if response == '?/?/?/?':
+         response = '?/?/?/UNKNOWN'
+ 
+-    geo_cache.add(obj=CachedObject(name=cip, obj=response, ttl=43200)) # 12 hours
++    geo_cache[cip] = response
+     return response
+ 
+ 
+@@ -2277,7 +2319,7 @@ def handle_query(raw_data, client_ip):
+ 
+         unfilter = False
+ 
+-        if config['unfilter'] and (check_dom('NAME', name, forwarder, False, False, False) is False):
++        if config['unfilter'] and (check_dom('NAME', name, forwarder, 'FORWARDER', False, False) is False):
+             if cip in unfilter_cache or name in unfilter_cache:
+                 unfilter = True
+ 
+@@ -2298,6 +2340,10 @@ def handle_query(raw_data, client_ip):
+         result = dns_query(name, rdclass, rdtype, query.id, cip, unfilter, False)
+ 
+ 
++    status = 'NORMAL'
++    if len(result) > 4:
++        status = result[4]
++
+     if config['min_resp']:
+         if result[0] == 0:
+             if result[1]:
+@@ -2316,7 +2362,7 @@ def handle_query(raw_data, client_ip):
+ 
+     #logging.debug('RESPONSE-FLAGS-TO-CLIENT [{0}]: {1}'.format(query.id, dns.flags.to_text(response.flags)))
+ 
+-    log_helper(name, dns.rdatatype.to_text(rdtype), result, 'RESPONSE-TO-CLIENT', query.id)
++    log_helper(name, dns.rdatatype.to_text(rdtype), (result[0], result[1], result[2], result[3], status), 'RESPONSE-TO-CLIENT', query.id)
+ 
+     beingchecked.discard(bname)
+ 
+@@ -2589,7 +2635,6 @@ if __name__ == '__main__':
+     config['geodb'] = False
+ 
+     # Cache Settings
+-    config['blacklist_cache_ttl'] = 60
+     config['blacklist_ttl'] = 3600
+     config['rc_ttl'] = 120
+     config['rc_error_ttl'] = 30
+@@ -2617,7 +2662,6 @@ if __name__ == '__main__':
+     config['min_resp'] = True
+ 
+     # Parent hit
+-    config['parent_hit'] = False # Parent blacklist hit
+     config['parent_cache_hit'] = False
+ 
+     # Block IP related answers
+diff --git a/requirements.txt b/requirements.txt
+index 0fb8330..154fcff 100644
+--- a/requirements.txt
++++ b/requirements.txt
+@@ -1,3 +1,4 @@
++cachetools>=3.1.1         
+ chardet==3.0.4 # Latest version supported by requests
+ clientsubnetoption>=2.1.1
+ dnspython>=2.0.0

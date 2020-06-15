@@ -1,0 +1,26 @@
+diff --git a/Dockerfile b/Dockerfile
+index d992c28..8ed4a2c 100644
+--- a/Dockerfile
++++ b/Dockerfile
+@@ -12,7 +12,7 @@ ADD cache.py /opt/deugniets/cache.py
+ ADD requirements.txt /opt/deugniets/requirements.txt
+ ADD deugniets.conf.docker /opt/deugniets/deugniets.conf
+ ADD local.list.docker /opt/deugniets/local.list
+-ADD GeoLite2-City.mmdb /opt/deugniets/GeoLite2-City.mmdb
++ADD /usr/share/GeoIP/GeoLite2-City.mmdb /usr/share/GeoIP/GeoLite2-City.mmdb
+ RUN pip3 install --upgrade pip
+ RUN pip3 install --upgrade chardet==3.0.4
+ RUN pip3 install --upgrade urllib3==1.25.7
+diff --git a/deugniets.py b/deugniets.py
+index ace5241..7070b58 100644
+--- a/deugniets.py
++++ b/deugniets.py
+@@ -2184,7 +2184,7 @@ def geo(client_ip):
+ 
+     if config['geodb'] and is_ip.search(cip):
+         if cip in ('0.0.0.0', '0000:0000:0000:0000:0000:0000:0000:0000'):
+-            response = '?/?/?/LOCALNET'
++            response = '?/?/?/UNSPECIFIED'
+ 
+         elif cip in ('127.0.0.1', '0000:0000:0000:0000:0000:0000:0000:0001'):
+             response = '?/?/?/LOCALHOST'

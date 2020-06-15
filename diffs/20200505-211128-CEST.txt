@@ -1,0 +1,191 @@
+diff --git a/deugniets.py b/deugniets.py
+index da755cf..836c03e 100644
+--- a/deugniets.py
++++ b/deugniets.py
+@@ -1,7 +1,7 @@
+ #!/usr/bin/env python3
+ '''
+ ===========================================================================
+- deugniets.py v2.965-20200504 Copyright 2019-2020 by cbuijs@chrisbuijs.com
++ deugniets.py v2.967-20200505 Copyright 2019-2020 by cbuijs@chrisbuijs.com
+ ===========================================================================
+ 
+  Based on: https://github.com/supriyo-biswas/adblock-dns-server
+@@ -903,31 +903,39 @@ def is_formerr(rtype, value, qtype):
+ def is_blacklisted(qname, value, valuetype, checkip):
+     '''Check if blacklisted including simple locking'''
+     if config['filtering'] is False:
+-        return None, ''
++        return None, None
+ 
+     testvalue = str(value)
+     if not checkip:
+         testvalue = regex.split('\s+', str(value))[-1].lower() # Get last value
+ 
+-    count = 0
+-    while count < config['retry_count'] and testvalue in beingchecked:
+-        count += 1
+-        #logging.debug('{0}-BLACKLIST-SLEEP: {1} (#{2})'.format(valuetype, testvalue, count))
+-        time.sleep(config['retry_wait'])
++    if value in check_cache:
++        result, hitdata = check_cache.get(value)
++        logging.info('{0}-CHECK-RESULT [CACHE-{1}]: \"{2}\" -> \"{3}\" -> \"{4}\"'.format(valuetype, blacklisted_state.get(result, 'NOT-LISTED'), qname, testvalue, hitdata))
+ 
+-    if count >= config['retry_count']:
+-        logging.error('{0}-BLACKLIST-FAIL: {1} -> {2} - Took to long to check'.format(valuetype, qname, testvalue))
+-        return None, ''
++    else:
++        count = 0
++        while count < config['retry_count'] and testvalue in beingchecked:
++            count += 1
++            #logging.debug('{0}-BLACKLIST-SLEEP: {1} (#{2})'.format(valuetype, testvalue, count))
++            time.sleep(config['retry_wait'])
++
++        if count >= config['retry_count']:
++            logging.error('{0}-BLACKLIST-FAIL: {1} -> {2} - Took to long to check'.format(valuetype, qname, testvalue))
++            return None, None
+ 
+-    beingchecked.add(testvalue)
++        beingchecked.add(testvalue)
+ 
+-    result, hitdata = check_blacklisted(qname, testvalue, valuetype, checkip)
++        result, hitdata = check_blacklisted(qname, testvalue, valuetype, checkip)
+ 
+-    #logging.debug('{0}-CHECK-RESULT: {1} = {2}'.format(valuetype, testvalue, result))
++        check_cache[value] = result, hitdata
+ 
+-    beingchecked.discard(testvalue)
++        logging.info('{0}-CHECK-RESULT [{1}]: \"{2}\" -> \"{3}\" -> \"{4}\"'.format(valuetype, blacklisted_state.get(result, 'NOT-LISTED'), qname, testvalue, hitdata))
+ 
+-    return result or None, hitdata or None
++        beingchecked.discard(testvalue)
++
++
++    return result, hitdata
+ 
+ 
+ def check_blacklisted(qname, testvalue, valuetype, checkip):
+@@ -1015,38 +1023,40 @@ def check_blacklisted(qname, testvalue, valuetype, checkip):
+         if ip4:
+             #logging.debug('CHECK-{0}: {1} is an IPv4-Address'.format(valuetype, testvalue))
+             # Check if IPv4 is whitelisted
+-            ipcheck, hitdata = check_ip(qname, valuetype, testvalue, orgtestvalue, wl_ip4, 'WHITELIST', False)
++            ipcheck = check_ip(qname, valuetype, testvalue, orgtestvalue, wl_ip4, 'WHITELIST')
+             if ipcheck:
+-                return False, hitdata
++                return False, ipcheck
+ 
+-            # Check if IPv4 is blacklisted
+-            ipcheck, hitdata = check_ip(qname, valuetype, testvalue, orgtestvalue, bl_ip4, 'BLACKLIST', True)
+-            if ipcheck:
+-                #if rev_check(testvalue, wl_dom, 'WHITELIST'):
+-                rcheck = rev_check_trie(testvalue, wl_dom_trie, 'WHITELIST')
+-                if rcheck:
+-                    return False, rcheck
+-                else:
+-                    return True, hitdata
++            else:
++                # Check if IPv4 is blacklisted
++                ipcheck = check_ip(qname, valuetype, testvalue, orgtestvalue, bl_ip4, 'BLACKLIST')
++                if ipcheck:
++                    #if rev_check(testvalue, wl_dom, 'WHITELIST'):
++                    rcheck = rev_check_trie(testvalue, wl_dom_trie, 'WHITELIST')
++                    if rcheck:
++                        return False, rcheck
++                    else:
++                        return True, ipcheck
+ 
+ 
+         # Check against IP6
+         else:
+             #logging.debug('CHECK-{0}: {1} is an IPv6-Address'.format(valuetype, testvalue))
+             # Check if IPv6 is whitelisted
+-            ipcheck, hitdata = check_ip(qname, valuetype, testvalue, orgtestvalue, wl_ip6, 'WHITELIST', False)
++            ipcheck = check_ip(qname, valuetype, testvalue, orgtestvalue, wl_ip6, 'WHITELIST')
+             if ipcheck:
+-                return False, hitdata
++                return False, ipcheck
+ 
+-            # Check if IPv6 is blacklisted
+-            ipcheck, hitdata = check_ip(qname, valuetype, testvalue, orgtestvalue, bl_ip6, 'BLACKLIST', True)
+-            if ipcheck:
+-                #if rev_check(testvalue, wl_dom, 'WHITELIST'):
+-                rcheck = rev_check_trie(testvalue, wl_dom_trie, 'WHITELIST')
+-                if rcheck:
+-                    return False, rcheck
+-                else:
+-                    return True, hitdata
++            else:
++                # Check if IPv6 is blacklisted
++                ipcheck = check_ip(qname, valuetype, testvalue, orgtestvalue, bl_ip6, 'BLACKLIST')
++                if ipcheck:
++                    #if rev_check(testvalue, wl_dom, 'WHITELIST'):
++                    rcheck = rev_check_trie(testvalue, wl_dom_trie, 'WHITELIST')
++                    if rcheck:
++                        return False, rcheck
++                    else:
++                        return True, ipcheck
+ 
+         # Check against GEO
+         gcheck = check_geo(qname, valuetype, testvalue, wl_geo, 'WHITELIST')
+@@ -1068,7 +1078,7 @@ def check_blacklisted(qname, testvalue, valuetype, checkip):
+             logging.warning('{0}-BLACKLIST-DNSL-HIT: \"{1}\"'.format(valuetype, testvalue))
+         return True, orgtestvalue
+ 
+-    return None, ''
++    return None, None
+ 
+ 
+ def check_rx(valuetype, testvalue, rxlst, rxbiglst, tag):
+@@ -1093,9 +1103,11 @@ def check_rx(valuetype, testvalue, rxlst, rxbiglst, tag):
+ 
+     return False
+ 
++
+ def check_dom_fast(trielist, qname):
+     return trielist.shortest_prefix(qname[::-1]).key[::-1] or False
+ 
++
+ def check_dom_trie(valuetype, testvalue, trielist, listname, onlyparent, smart):
+     #match = trielist.longest_prefix(testvalue[::-1]).key
+     match = trielist.shortest_prefix(testvalue[::-1]).key or False
+@@ -1214,17 +1226,16 @@ def check_dom_walk(valuetype, testvalue, domlist, listname, onlyparent):
+ #    return False
+ 
+ 
+-def check_ip(qname, valuetype, testvalue, orgtestvalue, iplist, listname, rc):
++def check_ip(qname, valuetype, testvalue, orgtestvalue, iplist, listname):
+     '''Check if IP is listed'''
+     #logging.debug('{0}-CHECK-IP [{1}]: {2}'.format(valuetype, listname, testvalue))
+     if testvalue in iplist:
++        ip = str(iplist.get_key(testvalue))
+         if config['log_hits'] and listname:
+-            ip = iplist.get_key(testvalue)
+             logging.warning('{0}-IP-HIT [{1}]: {2} -> {3} -> {4} ({5})'.format(valuetype, listname, qname, orgtestvalue, ip, geo(ip)))
++        return ip
+ 
+-        return rc, ip
+-
+-    return False, ''
++    return False
+ 
+ 
+ def check_geo(qname, valuetype, testvalue, geolst, listname):
+@@ -1272,7 +1283,7 @@ def check_geo(qname, valuetype, testvalue, geolst, listname):
+                     logging.warning('{0}-GEO-HIT [{1}]: {2} -> {3} -> {4}'.format(valuetype, listname, qname, testvalue, gcheck))
+                 return gcheck
+         
+-    return False, '?'
++    return False
+ 
+ 
+ # !!! FIX - Better handling of quotas per dat for AbuseIPDB
+@@ -2435,7 +2446,7 @@ def log_helper(qname, qrdtype, result, tag, qid, cip):
+         rcode = '{0}-{1}'.format(rcode, result[4])
+ 
+     ttl = 0
+-    if rcode == 'NOERROR' and result[1]:
++    if result[1]:
+         ttl = result[1][-1].ttl
+     elif result[2]:
+         ttl = result[2][-1].ttl

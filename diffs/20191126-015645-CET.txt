@@ -1,0 +1,195 @@
+diff --git a/deugniets.py b/deugniets.py
+index 452c20e..86210c0 100644
+--- a/deugniets.py
++++ b/deugniets.py
+@@ -1,7 +1,7 @@
+ #!/usr/bin/env python3
+ '''
+ =======================================================================
+- deugniets.py v2.59-20191125 Copyright 2019 by cbuijs@chrisbuijs.com
++ deugniets.py v2.592-20191126 Copyright 2019 by cbuijs@chrisbuijs.com
+ =======================================================================
+ 
+  Based on: https://github.com/supriyo-biswas/adblock-dns-server
+@@ -80,14 +80,9 @@ from IPy import IP
+ #from difflib import SequenceMatcher
+ 
+ # Stuff needed for DoH
+-#import io, base64, urllib.parse
+-#import pycurl
+ import base64
+ from hyper.contrib import HTTP20Adapter
+ 
+-# Stuff needed for ratelimit
+-#from ratelimit import limits, sleep_and_retry
+-
+ # AbuseIPDB
+ from abuseipdb import *
+ 
+@@ -182,9 +177,9 @@ is_dox6 = regex.compile("^(dn|http|tl)s://(do[ht]|ip(v)*)6\..*$", regex.I)
+ 
+ #####################################################################
+ 
+-# Replace socket.getaddrinfo with caching version to speedup requests/urllib
++# Replace socket.getaddrinfo with caching version to speedup requests/urllib/abuseipdb
+ def _getaddrinfo(host, port=53, family=0, type=0, proto=0, flags=0):
+-    cachename = '{0}/{1}'.format(host, port)
++    cachename = '{0}/{1}/GETADDRINFO'.format(host, port)
+     #logging.debug('GETADDRINFO: {0} {1} {2} {3} {4} {5}'.format(host, port, family, type, proto, flags))
+     result = cache.get(cachename)
+     tag = 'CACHE-HIT'
+@@ -207,7 +202,7 @@ def setup_nameservers():
+         dns.resolver.default_resolver = dns.resolver.Resolver(configure=False)
+         dns.resolver.default_resolver.nameservers = ['9.9.9.9', '149.112.112.112', '2620:fe::9', '2620:fe::fe:9']
+         dns.resolver.default_resolver.port = 53
+-        dns.resolver.default_resolver.use_edns(0, 0, 1220) # DNSFLag Day 2020 advice
++        dns.resolver.default_resolver.use_edns(0, 0, 1220) # DNSFLag Day 2020 advice. 1220:ipv6, 1480:ipv4
+         dns.resolver.default_resolver.timeout = 3
+         dns.resolver.default_resolver.lifetime = 15
+ 
+@@ -861,19 +856,6 @@ def check_if_blacklisted(testvalue, valuetype, checkip):
+                 else:
+                     return True
+ 
+-        elif config['abuseipdbkey']:
+-            score = False
+-            if testvalue in abuse_ip4:
+-                score = abuse_ip4.get(testvalue)
+-            else:
+-                ipcheck = ipdb.check(testvalue)
+-                if ipcheck:
+-                    score = ipcheck.abuseConfidenceScore
+-
+-                abuse_ip4[testvalue] = score
+-
+-            if score:
+-                logging.info('ABUSEIPDB: {0} = {1}'.format(testvalue, score))
+ 
+     # Check against IP6
+         elif is_ip6.search(testvalue):
+@@ -889,20 +871,6 @@ def check_if_blacklisted(testvalue, valuetype, checkip):
+                 else:
+                     return True
+ 
+-        elif config['abuseipdbkey']:
+-            score = False
+-            if testvalue in abuse_ip6:
+-                score = abuse_ip6.get(testvalue)
+-            else:
+-                ipcheck = ipdb.check(testvalue)
+-                if ipcheck:
+-                    score = ipcheck.abuseConfidenceScore
+-
+-                abuse_ip6[testvalue] = score
+-
+-            if score:
+-                logging.info('ABUSEIPDB: {0} = {1}'.format(testvalue, score))
+-
+     # Check against regex
+     #logging.debug('CHECK-RX: {0}'.format(orgtestvalue))
+     #match = check_rx(orgtestvalue, wl_rx)
+@@ -1180,6 +1148,34 @@ def dns_query(name, rdclass, rdtype, qid, cip, unfilter, fttl):
+         logging.warning('ACL-BLACKLIST-HIT [{0}]: Client {1} -> {2}'.format(qid, cip, bl_ip6.get_key(cip)))
+         return (dns.rcode.REFUSED, [], [], [])
+ 
++    if config['abuseipdbkey'] and is_ip.search(cip):
++          score = False
++
++          if cip.find(':') > 0 :
++              abuse_ip = abuse_ip6
++              bl_ip = bl_ip6
++          else:
++              abuse_ip = abuse_ip4
++              bl_ip = bl_ip4
++      
++          if cip in abuse_ip:
++              score = abuse_ip.get(cip)
++
++          elif (not cip in wl_ip4) and (not cip in wl_ip6):
++              ipcheck = ipdb.check(cip)
++              if ipcheck:
++                  logging.info('ABUSEIPDB-CHECK: {0}'.format(cip))
++                  score = ipcheck.abuseConfidenceScore
++
++              abuse_ip[cip] = score
++
++          #logging.debug('ABUSEIPDB: {0} = {1}'.format(cip, score))
++
++          if score and score > 90:
++              logging.warning('ABUSEIPDB-HIT [{0}]: Score for Client {1} = {2}'.format(qid, cip, score))
++              bl_ip[cip] = True
++              return (dns.rcode.REFUSED, [], [], [])
++
+     if qrdtype == 'ANY' and config['blockany']:
+         logging.warning('BLOCK-ANY-HIT [{0}]: {1}'.format(qid, cachename))
+         return (dns.rcode.REFUSED, [], [], [])
+@@ -1535,7 +1531,11 @@ def dns_query(name, rdclass, rdtype, qid, cip, unfilter, fttl):
+                                             returnstatus = 'WHITELISTED'
+                                             break
+                                         else:
+-                                            status = is_blacklisted(target, 'DATA', True)
++                                            if rdtype in ('A', 'AAAA'):
++                                                status = is_blacklisted(target, 'DATA', True)
++                                            else:
++                                                status = is_blacklisted(target, 'DATA', False)
++
+                                             if status is not None:
+                                                 if status is True: # Blacklisted
+                                                     if config['removeip'] and rdtype in ('A', 'AAAA'): # Remove IP from answer instead of blocking whole
+@@ -1678,7 +1678,6 @@ def dox_request(qid, qname, rdtype, cachename, urls, rfc8484, cip):
+         message.flags |= dns.flags.AD
+         message.find_rrset(message.additional, dns.name.root, 65535, dns.rdatatype.OPT, create=True, force_unique=True)
+ 
+-    cso = False
+     if config['use_ecs_ip'] and cip and is_ip.search(cip):
+         if cip.find(':') > 0:
+             bits = 64
+@@ -1689,7 +1688,9 @@ def dox_request(qid, qname, rdtype, cachename, urls, rfc8484, cip):
+ 
+         logging.info('EDNS-CLIENT-SUBNET-PRIVACY: {0} -> {1}/{2}'.format(cip, ocip, bits))
+         cso = clientsubnetoption.ClientSubnetOption(ocip, bits)
+-        message.use_edns(options=[cso])
++        message.use_edns(edns=0, ednsflags=0, payload=1220, request_payload=None, options=[cso])
++    else:
++        message.use_edns(edns=0, ednsflags=0, payload=1220, request_payload=None, options=None)
+ 
+     retries = 0
+     while retries < 3:
+@@ -2035,8 +2036,6 @@ def handle_query(raw_data, client_ip):
+     return response
+ 
+ 
+-#@sleep_and_retry
+-#@limits(calls=50, period=5)
+ class UDPHandler(socketserver.BaseRequestHandler):
+     '''UDP Handler'''
+     def handle(self):
+@@ -2069,8 +2068,6 @@ class UDPHandler(socketserver.BaseRequestHandler):
+                 pass
+ 
+ 
+-#@sleep_and_retry
+-#@limits(calls=15, period=30)
+ class TCPHandler(socketserver.BaseRequestHandler):
+     '''TCP Handler'''
+     def handle(self):
+@@ -2415,8 +2412,9 @@ if __name__ == '__main__':
+ 
+         if len(wl_dom) + len(wl_ip4) + len(wl_ip6) + len(wl_rx) + len(bl_dom) + len(bl_ip4) + len(bl_ip6) + len(bl_rx) == 0:
+             logging.info('FILTERING: Request/Response filtering DISABLED due to empty lists')
+-            config['filter_request'] = True
+-            config['filter_response'] = True
++            config['filtering'] = False
++            config['filter_request'] = False
++            config['filter_response'] = False
+         else:
+             logging.info('LIST-TOTALS [WHITELIST]: {0} Domains, {1} IPv4-Addresses, {2} IPv6-Addresses and {3} Regexes'.format(len(wl_dom), len(wl_ip4), len(wl_ip6), len(wl_rx)))
+             logging.info('LIST-TOTALS [BLACKLIST]: {0} Domains, {1} IPv4-Addresses, {2} IPv6-Addresses and {3} Regexes'.format(len(bl_dom), len(bl_ip4), len(bl_ip6), len(bl_rx)))
+@@ -2427,6 +2425,7 @@ if __name__ == '__main__':
+ 
+     # AbuseIPDB setup
+     if config['abuseipdbkey']:
++        logging.info('ABUSEIPDB: API-Key = {0}'.format(config['abuseipdbkey']))
+         ipdb = AbuseIPDB(config['abuseipdbkey'])
+ 
+     # Setup requests sessions

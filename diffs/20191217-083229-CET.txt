@@ -1,0 +1,110 @@
+diff --git a/deugniets.py b/deugniets.py
+index 5a4269c..d12f245 100644
+--- a/deugniets.py
++++ b/deugniets.py
+@@ -99,7 +99,7 @@ from cache import CachedObject, CacheInventory
+ cache = CacheInventory(maxsize=65535, housekeeping=60, name='DNS-Cache')
+ listed_cache = CacheInventory(maxsize=16384, housekeeping=60, name='Label-Cache')
+ unfilter_cache = CacheInventory(maxsize=512, housekeeping=60, name='UnFilter')
+-rr_cache = CacheInventory(maxsize=65535, housekeeping=60, name='RR-Cache')
++geo_cache = CacheInventory(maxsize=65535, housekeeping=60, name='GEO-Cache')
+ 
+ # Lists
+ wl_dom = dict()
+@@ -1039,31 +1039,28 @@ def check_ip(valuetype, testvalue, orgtestvalue, iplist, listname, rc):
+ 
+ def check_geo(valuetype, testvalue, geolst, listname):
+     if config['geodb']:
+-        gip = False
+-        try:
+-            gip = geoip.city(testvalue)
+-        except:
+-            pass
++        giploc = geo(testvalue)
++        if giploc:
++            city, area, country, continent = tuple(giploc.split('/')[0:4])
+ 
+-        if gip:
+-            if gip.city.name and gip.city.name.upper() in geolst:
++            if city in geolst:
+                 if config['log_hits'] and listname:
+-                    logging.warning('{0}-GEO-CITY-HIT [{1}]: {2} -> {3}'.format(valuetype, listname, testvalue, gip.city.name.upper()))
++                    logging.warning('{0}-GEO-CITY-HIT [{1}]: {2} -> {3}'.format(valuetype, listname, testvalue, city))
+                 return True
+ 
+-            if gip.subdivisions.most_specific.name and gip.subdivisions.most_specific.name.upper() in geolst:
++            if area in geolst:
+                 if config['log_hits'] and listname:
+-                    logging.warning('{0}-GEO-AREA-HIT [{1}]: {2} -> {3}'.format(valuetype, listname, testvalue, gip.subdivisions.most_specific.name.upper()))
++                    logging.warning('{0}-GEO-AREA-HIT [{1}]: {2} -> {3}'.format(valuetype, listname, testvalue, area))
+                 return True
+ 
+-            if gip.country.name and gip.country.name.upper() in geolst:
++            if country in geolst:
+                 if config['log_hits'] and listname:
+-                    logging.warning('{0}-GEO-COUNTRY-HIT [{1}]: {2} -> {3}'.format(valuetype, listname, testvalue, gip.country.name.upper()))
++                    logging.warning('{0}-GEO-COUNTRY-HIT [{1}]: {2} -> {3}'.format(valuetype, listname, testvalue, country))
+                 return True
+ 
+-            if gip.continent.name and gip.continent.name.upper() in geolst:
++            if continent in geolst:
+                 if config['log_hits'] and listname:
+-                    logging.warning('{0}-GEO-CONTINENT-HIT [{1}]: {2} -> {3}'.format(valuetype, listname, testvalue, gip.continent.name.upper()))
++                    logging.warning('{0}-GEO-CONTINENT-HIT [{1}]: {2} -> {3}'.format(valuetype, listname, testvalue, continent))
+                 return True
+ 
+     return False
+@@ -1953,7 +1950,6 @@ def clear_caches():
+     cache.clear()
+     listed_cache.clear()
+     unfilter_cache.clear()
+-    rr_cache.clear()
+     queryhits.clear()
+     gc.collect() # Collect garbage
+     return True
+@@ -2079,26 +2075,32 @@ def make_response(query):
+ 
+ def geo(client_ip):
+     cip = str(client_ip)
++    response = geo_cache.get(cip)
++    if response:
++        return response
++
+     ip6 = False
++    response = '-/-/-/-'
+     if config['geodb'] and is_ip.search(cip):
+         if cip.find(':') > 0:
+             ip6 = True
+ 
+         if cip in ('127.0.0.1', '::1'):
+-            return '-/-/-/LocalHost'
++            response = '-/-/-/LOCALHOST'
+ 
+         elif (ip6 is False and cip in private4) or (ip6 is True and cip in private6):
+-            return '-/-/-/Private'
++            response = '-/-/-/PRIVATE'
+ 
+         else:
+             try:
+                 gip = geoip.city(cip)
+                 if gip:
+-                    return '{0}/{1}/{2}/{3}'.format(gip.city.name or '-', gip.subdivisions.most_specific.name or '-', gip.country.name or '-', gip.continent.name or '-')
++                    response = regex.sub('\s+', '', '{0}/{1}/{2}/{3}'.format(gip.city.name or '-', gip.subdivisions.most_specific.name or '-', gip.country.name or '-', gip.continent.name or '-')).upper()
+             except:
+                 pass
+ 
+-    return '-/-/-/-'
++    geo_cache.add(obj=CachedObject(name=cip, obj=response, ttl=43200)) # 12 hours
++    return response
+ 
+ 
+ def handle_query(raw_data, client_ip):
+@@ -2121,7 +2123,7 @@ def handle_query(raw_data, client_ip):
+                     break
+ 
+ 
+-    logging.info('GEOIP: {0} - {1}'.format(client_ip, geo(client_ip)))
++    logging.info('GEO-IP: {0} - {1}'.format(client_ip, geo(client_ip))) #!!! Debug?
+ 
+     name = str(query.question[0].name).lower()
+ 

@@ -1,0 +1,23 @@
+diff --git a/README.md b/README.md
+index 7b52178..c782a15 100644
+--- a/README.md
++++ b/README.md
+@@ -7,3 +7,5 @@ https://github.com/supriyo-biswas/adblock-dns-server<br>
+ https://github.com/dnaeon/py-vconnector/blob/master/src/vconnector/cache.py<br>
+ https://www.reddit.com/r/Python/comments/2uik3q/expiring_inmemory_cache_module/<br>
+ https://www.bortzmeyer.org/hackathon-ietf-101.html</br>
++<br>
++This product includes the use GeoLite2 data created by MaxMind, available from https://www.maxmind.com<br>
+diff --git a/deugniets.py b/deugniets.py
+index 7ce8a61..2758766 100644
+--- a/deugniets.py
++++ b/deugniets.py
+@@ -1,7 +1,7 @@
+ #!/usr/bin/env python3
+ '''
+ =======================================================================
+- deugniets.py v2.633-20191216 Copyright 2019 by cbuijs@chrisbuijs.com
++ deugniets.py v2.634-20191216 Copyright 2019 by cbuijs@chrisbuijs.com
+ =======================================================================
+ 
+  Based on: https://github.com/supriyo-biswas/adblock-dns-server

@@ -1,0 +1,51 @@
+diff --git a/deugniets.py b/deugniets.py
+index 836c03e..5ab773a 100644
+--- a/deugniets.py
++++ b/deugniets.py
+@@ -1,7 +1,7 @@
+ #!/usr/bin/env python3
+ '''
+ ===========================================================================
+- deugniets.py v2.967-20200505 Copyright 2019-2020 by cbuijs@chrisbuijs.com
++ deugniets.py v2.97-20200505 Copyright 2019-2020 by cbuijs@chrisbuijs.com
+ ===========================================================================
+ 
+  Based on: https://github.com/supriyo-biswas/adblock-dns-server
+@@ -909,9 +909,12 @@ def is_blacklisted(qname, value, valuetype, checkip):
+     if not checkip:
+         testvalue = regex.split('\s+', str(value))[-1].lower() # Get last value
+ 
++    result = None
++    hitdata = None
++    fromcache = False
+     if value in check_cache:
++        fromcache = True
+         result, hitdata = check_cache.get(value)
+-        logging.info('{0}-CHECK-RESULT [CACHE-{1}]: \"{2}\" -> \"{3}\" -> \"{4}\"'.format(valuetype, blacklisted_state.get(result, 'NOT-LISTED'), qname, testvalue, hitdata))
+ 
+     else:
+         count = 0
+@@ -930,11 +933,21 @@ def is_blacklisted(qname, value, valuetype, checkip):
+ 
+         check_cache[value] = result, hitdata
+ 
+-        logging.info('{0}-CHECK-RESULT [{1}]: \"{2}\" -> \"{3}\" -> \"{4}\"'.format(valuetype, blacklisted_state.get(result, 'NOT-LISTED'), qname, testvalue, hitdata))
+-
+         beingchecked.discard(testvalue)
+ 
+ 
++    checklog = '\"{0}\" -> \"{1}\"'.format(testvalue, hitdata)
++
++    if qname != value:
++        checklog = '\"{0}\" -> {1}'.format(qname, checklog)
++
++    state = blacklisted_state.get(result, 'NOT-LISTED')
++
++    if fromcache:
++        state = 'CACHE-{0}'.format(state)
++
++    logging.info('{0}-CHECK-RESULT [{1}]: {2}'.format(valuetype, state, checklog))
++
+     return result, hitdata
+ 
+ 

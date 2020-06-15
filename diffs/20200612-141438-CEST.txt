@@ -1,0 +1,29 @@
+diff --git a/deugniets.py b/deugniets.py
+index d11dc26..8093887 100644
+--- a/deugniets.py
++++ b/deugniets.py
+@@ -1612,7 +1612,8 @@ def geosteer(cip, qname, answer):
+ 
+         geoinfo = geo(cip)
+         steerlist = geonames(geoinfo)
+-        logging.info('STEERLIST: {0} -> {1}'.format(cip, ', '.join(steerlist)))
++        if config['log_verbose']:
++            logging.info('STEERLIST: {0} -> {1}'.format(cip, ', '.join(steerlist)))
+ 
+         if steerlist:
+             new_answer = []
+@@ -1626,10 +1627,12 @@ def geosteer(cip, qname, answer):
+                 #if rrset.rdtype == ciptype and len(rrdatalist) > 1:
+                 if rrset.rdtype in (1, 28) and len(rrdatalist) > 1:
+                     for ip in rrdatalist:
+-                        logging.info('GEO-STEER-RR: {0}/{1} = {2} ({3})'.format(rrname, rdtypet, ip, geo(ip)))
++                        if config['log_verbose']:
++                            logging.info('GEO-STEER-RR: {0}/{1} = {2} ({3})'.format(rrname, rdtypet, ip, geo(ip)))
++
+                         geoname = check_geo(qname, 'IP', ip, steerlist, 'GEOSTEER')
+                         if geoname:
+-                            logging.info('GEO-STEER: Client {0} ({1}) close to {2} ({3}) for {4}/{5}'.format(cip, geoinfo, ip, geoname, rrname, rdtypet))
++                            #logging.info('GEO-STEER: Client {0} ({1}) close to {2} ({3}) for {4}/{5}'.format(cip, geoinfo, ip, geoname, rrname, rdtypet))
+                             newrrdata.append(ip)
+                             geodata.add(geoname)
+                 

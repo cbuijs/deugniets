@@ -1,0 +1,24 @@
+diff --git a/deugniets.py b/deugniets.py
+index 38234bc..d9f3aa8 100644
+--- a/deugniets.py
++++ b/deugniets.py
+@@ -1,7 +1,7 @@
+ #!/usr/bin/env python3
+ '''
+ ===========================================================================
+- deugniets.py v2.72-20200219 Copyright 2019-2020 by cbuijs@chrisbuijs.com
++ deugniets.py v2.721-20200219 Copyright 2019-2020 by cbuijs@chrisbuijs.com
+ ===========================================================================
+ 
+  Based on: https://github.com/supriyo-biswas/adblock-dns-server
+@@ -1360,8 +1360,8 @@ def dns_query(name, rdclass, rdtype, qid, cip, unfilter, fttl):
+ 
+     cachename = '{0}/IN/{1}'.format(qname, qrdtype)
+ 
+-    if cip not in private4 and cip not in private6:
+-        cachename = '{0}/{1}'.format(cachename, 'PUBLIC')
++    if is_ip.seach(cip) and cip not in private4 and cip not in private6:
++        cachename = '{0}/PUBLIC'.format(cachename)
+ 
+     if unfilter:
+         cachename = '{0}/{1}'.format(cachename, cip)

@@ -1,0 +1,158 @@
+diff --git a/deugniets.conf b/deugniets.conf
+index bfea4b2..007161b 100644
+--- a/deugniets.conf
++++ b/deugniets.conf
+@@ -17,7 +17,6 @@ port = 53001
+ #nameservers = ["https://dns.google/dns-query"]
+ 
+ #nameservers = ["https://dns.quad9.net/dns-query"]
+-#bootstrap = ["9.9.9.9", "149.112.112.112", "2620:fe::9", "2620:fe::fe"]
+ 
+ #nameservers = ["https://doh.opendns.com/dns-query"]
+ 
+@@ -29,9 +28,10 @@ port = 53001
+ #nameservers = ["127.0.0.1", "::1"]
+ 
+ #nameservers = ["https://ipv4.dns.nextdns.io/126ab2/nuc-deugniets-https4", "https://ipv6.dns.nextdns.io/126ab2/nuc-deugniets-https6", "45.90.28.131", "45.90.30.131", "2a07:a8c0::12:6ab2", "2a07:a8c1::12:6ab2"]
+-nameservers = ["https://ipv4.dns.nextdns.io/126ab2/nuc-deugniets-https4", "https://ipv6.dns.nextdns.io/126ab2/nuc-deugniets-https6"]
++#nameservers = ["https://ipv4.dns.nextdns.io/126ab2/nuc-deugniets-https4", "https://ipv6.dns.nextdns.io/126ab2/nuc-deugniets-https6"]
+ #nameservers = ["https://dns.nextdns.io/126ab2/nuc-deugniets-https"]
+ #nameservers = ["45.90.28.131", "45.90.30.131", "2a07:a8c0::12:6ab2", "2a07:a8c1::12:6ab2"]
++nameservers = ["tls://nuc-deugniets-126ab2.dns.nextdns.io"]
+ 
+ # DNS Servers to forward to
+ #nameservers = ["1.1.1.1", "1.0.0.1", "8.8.8.8", "8.8.4.4", "9.9.9.10", "149.112.112.10"]
+@@ -43,6 +43,7 @@ nameservers = ["https://ipv4.dns.nextdns.io/126ab2/nuc-deugniets-https4", "https
+ # DNSFilter
+ #nameservers = ["103.247.36.36", "103.247.37.37"]
+ # XS4ALL
++#nameservers = ["tls://resolver.xs4all.nl"]
+ #nameservers = ["194.109.6.66", "194.109.9.99", "194.109.104.104", "2001:888:0:6::66", "2001:888:0:9::99"]
+ #nameservers = ["tls://resolver.xs4all.nl"]
+ # Cleanbrowsing AdultFilter
+@@ -127,5 +128,5 @@ optimize = false
+ #blacklist = ["/opt/accomplist/chris/regex.black", "/opt/accomplist/deugniets/plain.black.regex.list", "/opt/accomplist/deugniets/optimized.black.domain.list", "/opt/accomplist/deugniets/plain.black.ip4cidr.list", "/opt/accomplist/deugniets/plain.black.ip6cidr.list"]
+ 
+ whitelist = ["/opt/deugniets/forwarders.list", "/opt/deugniets/alias.list", "/opt/deugniets/unfilter.list", "/opt/deugniets/doh.alias.list", "/opt/accomplist/chris/connectivity-check.list", "/opt/accomplist/deugniets/deugniets.white.list", "/opt/accomplist/chris/white.special", "/opt/accomplist/chris/private-addresses.list"]
+-blacklist = ["/opt/deugniets/black.list", "/opt/accomplist/deugniets/deugniets.black.list","/opt/accomplist/family-safe/deugniets.black.list", "/opt/accomplist/malicious-ip/deugniets.black.list"]
++#blacklist = ["/opt/deugniets/black.list", "/opt/accomplist/deugniets/deugniets.black.list","/opt/accomplist/family-safe/deugniets.black.list", "/opt/accomplist/malicious-ip/deugniets.black.list"]
+ 
+diff --git a/deugniets.py b/deugniets.py
+index 67ce8a1..305d628 100644
+--- a/deugniets.py
++++ b/deugniets.py
+@@ -1,7 +1,7 @@
+ #!/usr/bin/env python3
+ '''
+ =======================================================================
+- deugniets.py v2.561-20191113 Copyright 2019 by cbuijs@chrisbuijs.com
++ deugniets.py v2.57-20191115 Copyright 2019 by cbuijs@chrisbuijs.com
+ =======================================================================
+ 
+  Based on: https://github.com/supriyo-biswas/adblock-dns-server
+@@ -46,6 +46,7 @@ import threading
+ # Sockets and SSL
+ import socket
+ import socketserver
++import ssl
+ 
+ # DNSPython
+ import dns.rcode
+@@ -180,7 +181,7 @@ def setup_nameservers():
+     '''Setup NameServers to Forward to'''
+     if 'nameservers' in config:
+         dns.resolver.default_resolver = dns.resolver.Resolver(configure=False)
+-        dns.resolver.default_resolver.nameservers = config['nameservers']
++        dns.resolver.default_resolver.nameservers = ['9.9.9.9', '149.112.112.112', '2620:fe::9', '2620:fe::fe:9']
+         dns.resolver.default_resolver.port = 53
+         dns.resolver.default_resolver.use_edns(0, 0, 1220) # DNSFLag Day 2020 advice
+         dns.resolver.default_resolver.timeout = 3
+@@ -1694,14 +1695,25 @@ def dox_request(qid, qname, rdtype, cachename, urls, rfc8484, cip):
+                         return None, dns.rcode.REFUSED
+ 
+ 
+-                # TLS !!! NEEDS WORK - DOES NOT WORK !!!
++                # TLS !!! NEEDS WORK !!! NEEDS DNSPYTHON 2.0.0 !!! OVERHAUL !!! BUGGY (Timeouts) !!! Persistent connections needed !!!
+                 elif url.startswith('tls://'): # Port 853
+-                    addr = regex.sub('^' + regex.escape('tls://'), '', url)
+-                    addr, port = '{0}{1}'.format(addr, '@853').split('@')[0:2]
+-                    if config['log_forwards']:
+-                        logging.info('DOT-QUERY [#{0}]: Query for {1}/IN/{2} to {3}@{4}'.format(retries, qname, dns.rdatatype.to_text(rdtype), addr, port))
+-                    return None, dns.rcode.SERVFAIL
+-                   
++                    servername = regex.sub('^' + regex.escape('tls://'), '', url)
++                    if servername and servername.find('#') > 0:
++                        servername, addr = servername.split('#')[0:2]
++                        if addr and is_ip.search(addr):
++                           if config['log_forwards']:
++                               logging.info('DOT-QUERY [#{0}]: Query for {1}/IN/{2} to {3}@853 ({4})'.format(retries, qname, dns.rdatatype.to_text(rdtype), servername, addr))
++
++                           response = False
++                           try:
++                               response = dns.query.tls(message, addr, timeout=5, port=853, server_hostname=servername)
++
++                           except BaseException as err:
++                               logging.error('DOT-QUERY-ERROR: Query for {0}/IN/{1} to {2} - {3}'.format(qname, dns.rdatatype.to_text(rdtype), url, err))
++
++                           if response:
++                               return response, response.rcode()
++
+ 
+                 # DNS !!! NEEDS WORK - Process/Use port !!!
+                 elif url.startswith('dns://') or is_ip.search(url): # Port 53
+@@ -2021,6 +2033,7 @@ class TCPHandler(socketserver.BaseRequestHandler):
+         finally:
+             socket.close()
+ 
++
+ class ThreadedUDPServer4(socketserver.ThreadingMixIn, socketserver.UDPServer):
+     '''UDP Thread'''
+     allow_reuse_address = True
+@@ -2048,6 +2061,9 @@ class ThreadedTCPServer6(socketserver.ThreadingMixIn, socketserver.TCPServer):
+ def run_server():
+     '''Run DNS Server'''
+     ### !!! TO DO: Make multi-addres/port threads (ip-format <ip>[@port] e.g. 10.1.2.3@53).
++    ### !!! FIX: Use combined IPv4/IPv6 handler detecting address-family so can listen on same ports/etc:
++    ###    af = dns.inet.af_for_address(ipaddr)
++    ###    https://gitlab.labs.nic.cz/knot/respdiff/blob/master/respdiff/sendrecv.py#L198
+ 
+     dnsport = int(config['port'])
+ 
+@@ -2065,7 +2081,18 @@ def run_server():
+ 
+     logging.info('SERVER: DeugNietS Started - Accepting DNS requests on port {0}'.format(dnsport))
+ 
+-    #rcode, response = dns_query('deugniets-test.chrisbuijs.com.', 1, 1, random.randint(1, 65535), 'TEST', True, 60)[0:2]
++    newnameservers = list()
++    for dnsserver in config['nameservers']:
++        if dnsserver.startswith('tls://'):
++            hostname = dnsserver.split('/')[2]
++            ips = list((map( lambda x: x[4][0], socket.getaddrinfo('{0}.'.format(hostname.rstrip('.')), 53, type=socket.SOCK_STREAM))))
++            logging.info('TLS-RESOLUTION: {0} -> {1}'.format(hostname, ', '.join(ips)))
++            for ip in ips:
++                newentry = 'tls://{0}#{1}'.format(hostname, ip)
++                newnameservers.append(newentry)
++
++    if newnameservers:
++        config['nameservers'] = newnameservers
+ 
+     try:
+         for thread in [udp_server_thread4, tcp_server_thread4, udp_server_thread6, tcp_server_thread6]:
+@@ -2099,8 +2126,7 @@ if __name__ == '__main__':
+     config['port'] = 53
+ 
+     # Nameservers to forward to
+-    config['nameservers'] = ['9.9.9.9', '149.112.112.112']
+-    config['bootstrap'] = False
++    config['nameservers'] = ['9.9.9.9', '149.112.112.112', '2620:fe::9', '2620:fe::fe:9']
+     config['safe_nameservers'] = False
+ 
+     # Cache Settings
+@@ -2324,7 +2350,6 @@ if __name__ == '__main__':
+     setup_nameservers()
+ 
+     # Setup request sessions
+-    #if config['bootstrap']: !!! TODO !!!
+     requests_session = requests.Session()
+     requests_session.mount('https://', HTTP20Adapter())
+ 

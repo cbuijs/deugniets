@@ -1,0 +1,25 @@
+diff --git a/Dockerfile b/Dockerfile
+index de814d3..5b3f4b5 100644
+--- a/Dockerfile
++++ b/Dockerfile
+@@ -17,7 +17,7 @@ RUN pip3 install --upgrade chardet==3.0.4
+ RUN pip3 install --upgrade urllib3==1.25.7
+ RUN pip3 install --upgrade git+https://github.com/opendns/dnspython-clientsubnetoption@master
+ RUN pip3 install --upgrade git+https://github.com/rthalley/dnspython@master
+-#RUN pip3 install --upgrade git+https://github.com/psf/requests@master
++RUN pip3 install --upgrade git+https://github.com/psf/requests@master
+ RUN pip3 install --upgrade -r requirements.txt
+ CMD [ "python3", "deugniets.py", "deugniets.conf" ]
+ 
+diff --git a/deugniets.py b/deugniets.py
+index c6bea18..568dd6a 100644
+--- a/deugniets.py
++++ b/deugniets.py
+@@ -3634,7 +3634,6 @@ if __name__ == '__main__':
+     # Terminate
+     requests_session.close()
+     #abuseipdb_session.close()
+-    geoip.close()
+  
+     logging.info('SERVER: DeugNietS Stopped')
+ 

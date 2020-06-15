@@ -1,0 +1,126 @@
+diff --git a/deugniets.py b/deugniets.py
+index 615e59a..153fbc8 100644
+--- a/deugniets.py
++++ b/deugniets.py
+@@ -1,7 +1,7 @@
+ #!/usr/bin/env python3
+ '''
+ ===========================================================================
+- deugniets.py v2.762-20200309 Copyright 2019-2020 by cbuijs@chrisbuijs.com
++ deugniets.py v2.765-20200311 Copyright 2019-2020 by cbuijs@chrisbuijs.com
+ ===========================================================================
+ 
+  Based on: https://github.com/supriyo-biswas/adblock-dns-server
+@@ -66,7 +66,7 @@ import threading
+ import socket
+ from socket import _socket
+ import socketserver
+-import ssl
++#import ssl
+ 
+ # DNSPython
+ import dns.rcode
+@@ -440,12 +440,12 @@ def read_list(filenames, listname, domlst, ip4lst, ip6lst, rxlst, unlst, unip4,
+             domlst.update(dict.fromkeys(list(map(make_dom, filter(None, filter(is_dom.search, cleanlines)))), 'Domain'))
+ 
+             for entry in list(filter(None, filter(is_domword.search, cleanlines))):
+-                    try:
+-                        domwordrx = '^(.*[\.\-])*{0}([\.\-].*)*$'.format(entry.lstrip('*'))
+-                        rxlst[domwordrx] = regex.compile(domwordrx, regex.I)
+-                        logging.info('DOMWORD: {0} -> {1}'.format(entry, domwordrx))
+-                    except BaseException as err:
+-                        logging.warning('LIST ({0}) [#{1}]: Invalid Syntax: \"{2}\" - \"{3}\" - {4}'.format(lname, count, line, entry, err))
++                try:
++                    domwordrx = '^(.*[\.\-])*{0}([\.\-].*)*$'.format(entry.lstrip('*'))
++                    rxlst[domwordrx] = regex.compile(domwordrx, regex.I)
++                    logging.info('DOMWORD: {0} -> {1}'.format(entry, domwordrx))
++                except BaseException as err:
++                    logging.warning('LIST [{0}]: Invalid Syntax: \"{1}\" - {2}'.format(lname, entry, err))
+ 
+             for entry in list(filter(None, filter(is_geo.search, cleanlines))):
+                 #entry = entry.lstrip('@')
+@@ -470,7 +470,7 @@ def read_list(filenames, listname, domlst, ip4lst, ip6lst, rxlst, unlst, unip4,
+                     logging.debug('SPOOF: {0} redirect to {1}'.format(domain, ', '.join(value.split(','))))
+                     alias[domain] = value
+                 else:
+-                    logging.warning('LIST ({0}) [#{1}]: Invalid ALIAS Syntax: \"{2}\"'.format(lname, count, line))
++                    logging.warning('LIST [{0}]: Invalid ALIAS Syntax: \"{1}\"'.format(lname, entry))
+ 
+             for entry in list(filter(None, filter(is_forwarder.search, cleanlines))):
+                 domain, value = get_value(entry, '>', is_ip.search, False)
+@@ -479,7 +479,7 @@ def read_list(filenames, listname, domlst, ip4lst, ip6lst, rxlst, unlst, unip4,
+                     logging.debug('FORWARDER: {0} forward to {1}'.format(domain, ', '.join(value.lower().split(','))))
+                     forwarder[domain] = value.lower()
+                 else:
+-                    logging.warning('LIST ({0}) [#{1}]: Invalid FORWARDER Syntax: \"{2}\"'.format(lname, count, line))
++                    logging.warning('LIST [{0}]: Invalid FORWARDER Syntax: \"{1}\"'.format(lname, entry))
+ 
+             for entry in list(filter(None, filter(is_ttl.search, cleanlines))):
+                 domain, value = get_value(entry, '!', None, False)
+@@ -488,7 +488,7 @@ def read_list(filenames, listname, domlst, ip4lst, ip6lst, rxlst, unlst, unip4,
+                     logging.debug('TTL: {0} = {1}'.format(domain, value))
+                     forcettl[domain] = int(value)
+                 else:
+-                    logging.warning('LIST ({0}) [#{1}]: Invalid TTL Syntax: \"{2}\"'.format(lname, count, line))
++                    logging.warning('LIST [{0}]: Invalid TTL Syntax: \"{1}\"'.format(lname, entry))
+ 
+             for entry in list(filter(None, filter(is_unfilter.search, cleanlines))):
+                 domip = entry.lstrip('+')
+@@ -501,26 +501,25 @@ def read_list(filenames, listname, domlst, ip4lst, ip6lst, rxlst, unlst, unip4,
+                     try:
+                         unip4[domip] = entry
+                     except BaseException as err:
+-                        logging.warning('LIST ({0}) [#{1}]: Invalid Syntax: \"{2}\" - \"{3}\" - {4}'.format(lname, count, line, entry, err))
++                        logging.warning('LIST [{0}]: Invalid Syntax: \"{1}\" - {2}'.format(lname, entry, err))
+ 
+                 elif is_ip6.search(domip):
+                     logging.debug('UNFILTER-IPV6: {0}'.format(domip))
+                     try:
+                         unip6[domip] = entry
+                     except BaseException as err:
+-                        logging.warning('LIST ({0}) [#{1}]: Invalid Syntax: \"{2}\" - \"{3}\" - {4}'.format(lname, count, line, entry, err))
++                        logging.warning('LIST [{0}]: Invalid Syntax: \"{1}\" - {2}'.format(lname, entry, err))
+ 
+                 else:
+-                    logging.warning('LIST ({0}) [#{1}]: Invalid UnFilter Syntax: \"{2}\"'.format(lname, count, line))
++                    logging.warning('LIST [{0}]: Invalid UnFilter Syntax: \"{1}\"'.format(lname, entry))
+ 
+ 
+             for entry in list(filter(None, filter(is_regex.search, cleanlines))):
+                 entry = entry.strip('/')
+-
+                 try:
+                     rxlst[entry] = regex.compile(entry, regex.I) # To test/validate
+                 except BaseException as err:
+-                    logging.warning('LIST ({0}) [#{1}]: Invalid Syntax: \"{2}\" - \"{3}\" - {4}'.format(lname, count, line, entry, err))
++                    logging.warning('LIST [{0}]: Invalid Syntax: \"{1}\" - {2}'.format(lname, entry, err))
+ 
+ 
+             newtotal = len(domlst) + len(ip4lst) + len(ip6lst) + len(rxlst) + len(unlst) + len(unip4) + len(unip6) + len(geolst) + len(alias) + len(forwarder) + len(forcettl)
+@@ -1946,7 +1945,7 @@ def dox_request(qid, qname, rdtype, cachename, urls, rfc8484, cip):
+ 
+                     response = False
+                     try:
+-                        response = dns.query.https(message, url, port=int(port), timeout=5, af=af)
++                        response = dns.query.https(message, url, post=config['doh_post'], port=int(port), timeout=5, af=af)
+ 
+                     except BaseException as err:
+                         logging.error('DOH-ERROR: Query for {0}/IN/{1} to {2} - {3}'.format(qname, dns.rdatatype.to_text(rdtype), url, err))
+@@ -2474,6 +2473,7 @@ def run_server():
+             logging.error('NEXTDNS-ERROR-GET-SERVERS: {0} - {1}'.format(url, err))
+ 
+         if rcode == 200:
++            config['doh_post'] = True
+             config['roundrobin'] = False
+             config['ecs_privacy4'] = 32
+             config['ecs_privacy6'] = 128
+@@ -2600,6 +2600,9 @@ if __name__ == '__main__':
+     config['nameservers'] = ['9.9.9.9', '149.112.112.112', '2620:fe::9', '2620:fe::fe:9']
+     config['safe_nameservers'] = False
+ 
++    # Use DoH POST instead of GET (Recommended: POST)
++    config['doh_post'] = True
++
+     # AbuseIPDB
+     config['abuseipdbkey'] = False
+ 

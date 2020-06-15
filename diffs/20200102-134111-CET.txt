@@ -1,0 +1,109 @@
+diff --git a/deugniets.py b/deugniets.py
+index 632f39e..a5412bd 100644
+--- a/deugniets.py
++++ b/deugniets.py
+@@ -1,7 +1,7 @@
+ #!/usr/bin/env python3
+ '''
+ ===========================================================================
+- deugniets.py v2.651-20200102 Copyright 2019-2020 by cbuijs@chrisbuijs.com
++ deugniets.py v2.653-20200102 Copyright 2019-2020 by cbuijs@chrisbuijs.com
+ ===========================================================================
+ 
+  Based on: https://github.com/supriyo-biswas/adblock-dns-server
+@@ -23,6 +23,7 @@
+  - Alias based on regex
+  - Ellaborate GeoIP to have combinations of City/Area/Country/Continent
+  - Listen on DoT (853) and DoH (443) - SSL/Certificate config
++ - Bootstrap servers for getaddrinfo
+  - Check/Investigate/Use Twisted names framework - Backburner
+ 
+ Done:
+@@ -2342,6 +2343,8 @@ def run_server():
+     logging.info('SERVER: DeugNietS Started - Accepting DNS requests on port {0}'.format(dnsport))
+ 
+     newnameservers = list()
++
++    # NextDNS Get best route/servers
+     if config['nextdns']:
+         url = 'https://router.nextdns.io'
+ 
+@@ -2349,16 +2352,17 @@ def run_server():
+         if config['nextdns_hpm']:
+             url += '&hardened_privacy=1'
+ 
+-        rcode = False
++        rcode = 500
++        headers = {'User-Agent': config['useragent']}
+         try:
+-            logging.info('NEXTDNS-FETCH: {0}'.format(url))
+-            r = requests_session.get(url, timeout=5, allow_redirects=False, proxies=None, stream=True)
++            #logging.info('NEXTDNS-FETCH: {0}'.format(url))
++            r = requests_session.get(url, timeout=5, headers=headers, allow_redirects=False, proxies=None, stream=True)
+             if r:
+                 rcode = r.status_code
+         except BaseException as err:
+             logging.error('NEXTDNS-ERROR-GET-SERVERS: {0} - {1}'.format(url, err))
+ 
+-        if rcode and rcode == 200:
++        if rcode == 200:
+             config['roundrobin'] = False
+             body = json.loads(r.text)
+             if body:
+@@ -2370,38 +2374,41 @@ def run_server():
+                     if config['nextdns_config']:
+                         dnsurl += '/{0}'.format(config['nextdns_config'])
+ 
+-                    if config['nextdns_id']:
+-                        dnsurl += '/{0}'.format(regex.sub('\s+', '%20', config['nextdns_id']))
++                        if config['nextdns_id']:
++                            dnsurl += '/{0}'.format(regex.sub('\s+', '%20', config['nextdns_id']))
+ 
+ 
+                     logging.info('NEXTDNS-SERVER: {0} ({1})'.format(dnsurl, ', '.join(dnsips)))
+                     newnameservers.append(dnsurl)
+-                    cachednshost = '{0}/443/GETADDRINFO'.format(dnshost)
++
++                    getaddrinfo = []
+                     for ip in dnsips:
+-                        getaddrinfo = []
+                         if ip.find(':') > 0:
+                             getaddrinfo.append((10, 1, 6, '', (ip, 443, 0, 0)))
+                         else:
+                             getaddrinfo.append((2, 1, 6, '', (ip, 443)))
+ 
++                    if getaddrinfo:
+                         #logging.info('NEXTDNS-GETADDR-CACHE: {0}'.format(getaddrinfo))
++                        cachednshost = '{0}/443/GETADDRINFO'.format(dnshost)
+                         cache.add(obj=CachedObject(name=cachednshost, obj=getaddrinfo, ttl=604800)) # 7 Days
+ 
+             else:
+                 logging.error('NEXTDNS-ERROR-GET-SERVERS: {0} - Empty Response'.format(url))
++
+         else:
+             logging.error('NEXTDNS-ERROR-GET-SERVERS: {0} - RCODE={1}'.format(url, rcode))
+ 
+ 
++    # DNS/TLS Servers
+     else:
+         # !!! TODO: Define bootstrap servers to use to resolve below
+         for dnsserver in config['nameservers']:
+             if dnsserver.startswith('tls://') and dnsserver.find('#') == -1:
+                 hostname = dnsserver.split('/')[2]
+-                ips = list((map(lambda x: x[4][0], socket.getaddrinfo('{0}.'.format(hostname.rstrip('.')), 53, type=socket.SOCK_STREAM))))
+-                logging.info('TLS-RESOLUTION: {0} -> {1}'.format(hostname, ', '.join(ips)))
++                ips = list((map(lambda x: x[4][0], socket.getaddrinfo('{0}.'.format(hostname.rstrip('.')), 853, type=socket.SOCK_STREAM))))
++                logging.info('TLS-SERVER: {0} ({1})'.format(hostname, ', '.join(ips)))
+                 for ip in ips:
+-                    #logging.debug('TLS-SERVER: {0} added {1}'.format(hostname, ip))
+                     newentry = 'tls://{0}#{1}'.format(hostname, ip)
+                     newnameservers.append(newentry)
+ 
+@@ -2411,6 +2418,7 @@ def run_server():
+     if newnameservers:
+         config['nameservers'] = newnameservers
+ 
++
+     try:
+         for thread in [udp_server_thread4, tcp_server_thread4, udp_server_thread6, tcp_server_thread6]:
+         #for thread in [udp_server_thread4, udp_server_thread6]:

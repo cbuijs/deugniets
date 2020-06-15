@@ -1,0 +1,23 @@
+diff --git a/deugniets.py b/deugniets.py
+index 5a2ba06..0d4e71b 100644
+--- a/deugniets.py
++++ b/deugniets.py
+@@ -1,7 +1,7 @@
+ #!/usr/bin/env python3
+ '''
+ ===========================================================================
+- deugniets.py v3.225-20200612 Copyright 2019-2020 by cbuijs@chrisbuijs.com
++ deugniets.py v3.25-20200612 Copyright 2019-2020 by cbuijs@chrisbuijs.com
+ ===========================================================================
+ 
+  Based on: https://github.com/supriyo-biswas/adblock-dns-server
+@@ -1632,7 +1632,8 @@ def geosteer(cip, qname, answer):
+ 
+                         geoname = check_geo(qname, 'IP', ip, steerlist, 'GEOSTEER')
+                         if geoname:
+-                            #logging.info('GEO-STEER: Client {0} ({1}) close to {2} ({3}) for {4}/{5}'.format(cip, geoinfo, ip, geoname, rrname, rdtypet))
++                            if config['log_verbose']:
++                                logging.info('GEO-STEER: Client {0} ({1}) close to {2} ({3}) for {4}/{5}'.format(cip, geoinfo, ip, geoname, rrname, rdtypet))
+                             newrrdata.append(ip)
+                             geodata.add(geoname)
+                 

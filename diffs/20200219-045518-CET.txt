@@ -1,0 +1,26 @@
+diff --git a/deugniets.py b/deugniets.py
+index cec687a..4ee3383 100644
+--- a/deugniets.py
++++ b/deugniets.py
+@@ -521,7 +521,7 @@ def read_list(filenames, listname, domlst, ip4lst, ip6lst, rxlst, unlst, unip4,
+             newtotal = len(domlst) + len(ip4lst) + len(ip6lst) + len(rxlst) + len(unlst) + len(unip4) + len(unip6) + len(geolst) + len(alias) + len(forwarder) + len(forcettl)
+             total = newtotal - oldtotal
+ 
+-            logging.info('PROCESS-LIST ({0}): Added {1} new entries (Skipped {2} comments/empty/invalid)...'.format(lname, total, len(lines) - total))
++            logging.info('PROCESS-LIST ({0}): Added {1} new entries (Skipped {2} comment/duplicate/empty/invalid)...'.format(lname, total, len(lines) - total))
+ 
+     return domlst, ip4lst, ip6lst, rxlst, unlst, unip4, unip6, geolst
+ 
+@@ -1360,8 +1360,10 @@ def dns_query(name, rdclass, rdtype, qid, cip, unfilter, fttl):
+ 
+     cachename = '{0}/IN/{1}'.format(qname, qrdtype)
+ 
+-    if cip not in private4 and cip not in private6:
+-        cachename = '{0}/PUBLIC'.format(cachename)
++    if cip in private4 or cip in private6:
++        cachename = '{0}/IN/{1}'.format(qname, qrdtype)
++    else:
++        cachename = '{0}/IN/{1}/PUBLIC'.format(qname, qrdtype)
+ 
+     if check_badip(cip):
+         return (dns.rcode.REFUSED, [], [], [])

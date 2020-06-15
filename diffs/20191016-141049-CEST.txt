@@ -1,0 +1,86 @@
+diff --git a/deugniets.py b/deugniets.py
+index 50039ba..e8c81fd 100644
+--- a/deugniets.py
++++ b/deugniets.py
+@@ -1,7 +1,7 @@
+ #!/usr/bin/env python3
+ '''
+ =======================================================================
+- deugniets.py v2.365-20191014 Copyright 2019 by cbuijs@chrisbuijs.com
++ deugniets.py v2.37-20191016 Copyright 2019 by cbuijs@chrisbuijs.com
+ =======================================================================
+ 
+  Based on: https://github.com/supriyo-biswas/adblock-dns-server
+@@ -759,14 +759,15 @@ def check_if_blacklisted(testvalue, valuetype, checkip):
+ 
+         wmatch = check_dom(valuetype, testvalue, wl_dom, 'WHITELIST', False, False) # Whitelisted
+         if wmatch:
+-            bmatch = check_dom(valuetype, testvalue, bl_dom, 'BLACKLIST', False, True)
+-            match = '{0}{1}'.format(bmatch, wmatch)
+-            logging.debug('MATCHING-DEBUG: DOM:{0} - WHITE:{1} - BLACK:{2}'.format(testvalue, wmatch, bmatch))
+-            if bmatch and (testvalue == match or testvalue.endswith('.{0}'.format(match))):
+-                return True
++            if config['smartdoms']:
++                bmatch = check_dom(valuetype, testvalue, bl_dom, 'BLACKLIST', False, True)
++                match = '{0}{1}'.format(bmatch, wmatch)
++                logging.debug('MATCHING-DEBUG: DOM:{0} - WHITE:{1} - BLACK:{2}'.format(testvalue, wmatch, bmatch))
++                if bmatch and (testvalue == match or testvalue.endswith('.{0}'.format(match))) and (not check_dom(valuetype, bmatch, 'WHITELIST', False, False)):
++                    return True
+             return False
+     
+-        #### !!!! NEED TO DO THE SAME WHITE/BLACK-COMBO MATCHING AS ABOVE FOR THE REST !!!! ####
++        #### !!!! TODO: NEED TO DO THE SAME WHITE/BLACK-COMBO MATCHING AS ABOVE FOR THE REST !!!! ####
+ 
+         if check_rx(valuetype, orgtestvalue, wl_rx, 'WHITELIST'):
+             return False
+@@ -1230,22 +1231,6 @@ def dns_query(name, rdclass, rdtype, qid, cip, unfilter, fttl):
+         if config['parent_cache_hit'] is not True:
+             break
+ 
+-    #elif config['parent_hit']:
+-    #    fqdn = ''
+-    #    for label in filter(None, qname.strip('.').split('.')[::-1]):
+-    #        fqdn = label + '.' + fqdn
+-    #        parentcachename = fqdn + '/IN/' + qrdtype
+-    #        parent = cache.get(parentcachename)
+-    #        if parent is not None:
+-    #            if parent[0] != 0 or parent[4] == 'BLACKLISTED':
+-    #                obj = cache.info(name=parentcachename)
+-    #                expires = obj.timestamp + obj.ttl
+-    #                left = int(expires - time.time())
+-    #                if left > 0:
+-    #                    logging.warning('PARENT-CACHE-HIT [{0}]: {1} -> {2} = {3} (TTL-LEFT:{4}) - {5}'.format(qid, cachename, parentcachename, dns.rcode.to_text(parent[0]), left, parent[4]))
+-    #                    returnstatus = parent[4]
+-    #                    rv = (parent[0], [], [], [])
+-    #            break
+ 
+     if rv is None and config['filter_request'] and unfilter is False:
+         #logging.debug('REQUEST-QNAME-CHECK [{0}]: {1}'.format(qid, qname))
+@@ -1357,17 +1342,16 @@ def dns_query(name, rdclass, rdtype, qid, cip, unfilter, fttl):
+         fwdtag = 'GLOBAL'
+ 
+         ### !!! TODO: add PORT as option, default 53
+-        if returnstatus is not 'BLACKLISTED':
+-            match = check_dom('NAME', qname, forwarder, 'FORWARDER', False, False)
+-            if match:
+-                fwdtag = 'SELECTIVE'
+-                addrs = ip_family(cachename, forwarder[match].split(','), cip)
+-                if cip in addrs:
+-                    logging.error('FORWARD-LOOP [{0}]: \"{1}\" from {2} (forwarder for {3})'.format(qid, cachename, cip, match))
+-                    rv = (dns.rcode.SERVFAIL, [], [], [])
+-                    return rv
+-
+-                forwarder[match] = ','.join(addrs)
++        ### !!! TODO: Optimize return of below NXDOMAIN and REFUSED to skip forwardinf and cache
++        match = check_dom('NAME', qname, forwarder, 'FORWARDER', False, False)
++        if match:
++            fwdtag = 'SELECTIVE'
++            addrs = ip_family(cachename, forwarder[match].split(','), cip)
++            if cip in addrs:
++                logging.error('FORWARD-LOOP [{0}]: \"{1}\" from {2} (forwarder for {3})'.format(qid, cachename, cip, match))
++                return (dns.rcode.SERVFAIL, [], [], [])
++
++            forwarder[match] = ','.join(addrs)
+ 
+         if addrs is False:
+             match = 'DEFAULT'

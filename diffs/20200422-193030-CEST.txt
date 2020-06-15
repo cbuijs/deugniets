@@ -1,0 +1,221 @@
+diff --git a/deugniets.py b/deugniets.py
+index ddacf14..bff5bed 100644
+--- a/deugniets.py
++++ b/deugniets.py
+@@ -1,7 +1,7 @@
+ #!/usr/bin/env python3
+ '''
+ ===========================================================================
+- deugniets.py v2.885-20200422 Copyright 2019-2020 by cbuijs@chrisbuijs.com
++ deugniets.py v2.89-20200422 Copyright 2019-2020 by cbuijs@chrisbuijs.com
+ ===========================================================================
+ 
+  Based on: https://github.com/supriyo-biswas/adblock-dns-server
+@@ -753,34 +753,34 @@ def expand_ip(ip):
+     return str(IP(str(ip)).strFullsize())
+ 
+     # !!!! Remove below
+-    ip = str(ip)
+-    if not is_ip6.search(ip):
+-        return ip
++    #ip = str(ip)
++    #if not is_ip6.search(ip):
++    #    return ip
+ 
+-    new_ip = ip
++    #new_ip = ip
+ 
+-    prefix = False
+-    if '/' in new_ip:
+-        new_ip, prefix = new_ip.split('/')[0:2]
+-        if new_ip.endswith(':'):
+-            new_ip = '{0}0'.format(new_ip)
++    #prefix = False
++    #if '/' in new_ip:
++    #    new_ip, prefix = new_ip.split('/')[0:2]
++    #    if new_ip.endswith(':'):
++    #        new_ip = '{0}0'.format(new_ip)
+ 
+-    if '::' in new_ip:
+-        padding = 9 - new_ip.count(':')
+-        new_ip = new_ip.replace(('::'), ':' * padding)
++    #if '::' in new_ip:
++    #    padding = 9 - new_ip.count(':')
++    #    new_ip = new_ip.replace(('::'), ':' * padding)
+ 
+-    parts = new_ip.split(':')
+-    for part in range(8):
+-        parts[part] = str(parts[part]).zfill(4)
++    #parts = new_ip.split(':')
++    #for part in range(8):
++    #    parts[part] = str(parts[part]).zfill(4)
+ 
+-    new_ip = ':'.join(parts)
++    #new_ip = ':'.join(parts)
+ 
+-    if prefix:
+-        new_ip = '{0}/{1}'.format(new_ip, prefix)
++    #if prefix:
++    #    new_ip = '{0}/{1}'.format(new_ip, prefix)
+ 
+     #logging.debug('IPV6-EXPANDER: {0} -> {1}'.format(ip, new_ip))
+ 
+-    return new_ip
++    #return new_ip
+ 
+ 
+ def compress_ip(ip):
+@@ -875,7 +875,6 @@ def is_blacklisted(value, valuetype, checkip):
+     cachename = 'BLACKLISTED#{0}#{1}'.format(valuetype, value)
+     if cachename in check_cache:
+         result = check_cache.get(cachename, None)
+-        #logging.info('{0}-CACHE-BLACKLISTED-HIT: \"{1}\" = {2} ({3})'.format(valuetype, value, blacklisted_state.get(result, 'UNKNOWN'), cachename))
+         return result
+ 
+     #logging.debug('{0}-BLACKLIST-CHECK: {1}'.format(valuetype, testvalue))
+@@ -897,9 +896,10 @@ def is_blacklisted(value, valuetype, checkip):
+ 
+     #logging.debug('{0}-CHECK-RESULT: {1} = {2}'.format(valuetype, testvalue, result))
+ 
++    check_cache[cachename] = result
++
+     beingchecked.discard(testvalue)
+ 
+-    check_cache[cachename] = result
+     return result
+ 
+ 
+@@ -925,6 +925,9 @@ def check_blacklisted(testvalue, valuetype, checkip):
+                 logging.warning('SPECIFIC-NAME-DOM-HIT [BLACKLIST]: \"{0}\" (Parent \"{1}\" is WHITELISTED)'.format(testvalue, wcheck))
+                 return True
+ 
++            if config['smartdoms'] and check_dom_smart(valuetype, testvalue, bl_dom, 'WHITELIST-BLACKLIST', True):
++                return True
++
+             return False
+ 
+         if check_rx(valuetype, orgtestvalue, wl_rx, wl_big_rx, 'WHITELIST'):
+@@ -1003,48 +1006,13 @@ def check_blacklisted(testvalue, valuetype, checkip):
+                 else:
+                     return True
+ 
+-        # !!! Goes fast and uses up quota
+-        #if check_badip(testvalue):
+-        #    return True
+-
+-
+-    # Check against regex
+-    #logging.debug('CHECK-RX: {0}'.format(orgtestvalue))
+-    #match = check_rx(orgtestvalue, wl_rx)
+-    #if match: # Whitelisted
+-    #    if config['log_hits']:
+-    #        logging.warning('{0}-WHITELIST-RX-HIT: \"{1}\" matches \"{2}\"'.format(valuetype, testvalue, match))
+-    #    return False
+-    #else:
+-    #    match = check_rx(orgtestvalue, bl_rx)
+-    #    if match: # Whitelisted
+-    #        if config['log_hits']:
+-    #            logging.warning('{0}-BLACKLIST-RX-HIT: \"{1}\" matches \"{2}\"'.format(valuetype, testvalue, match))
+-    #        return True
+-    
+-    #match = wl_big_rx.search(orgtestvalue)
+-    #if match: # Whitelisted
+-    #    if config['log_hits']:
+-    #        logging.warning('{0}-WHITELIST-RX-HIT: \"{1}\" -> \"{2}\"'.format(valuetype, testvalue, match.group()))
+-    #        #matchrx = next((k for k, v in match.groupdict().items() if v is not None), None)
+-    #        #logging.warning('{0}-WHITELIST-RX-HIT: \"{1}\" -> \"{2}\" ({3})'.format(valuetype, testvalue, match.group(), wl_rx[matchrx]))
+-    #    return False
+-    #else:
+-    #    match = bl_big_rx.search(orgtestvalue)
+-    #    if match: # Blacklisted
+-    #        if config['log_hits']:
+-    #            logging.warning('{0}-BLACKLIST-RX-HIT: \"{1}\" -> \"{2}\"'.format(valuetype, testvalue, match.group()))
+-    #            #matchrx = next((k for k, v in match.groupdict().items() if v is not None), None)
+-    #            #logging.warning('{0}-BLACKLIST-RX-HIT: \"{1}\" -> \"{2}\" ({3})'.format(valuetype, testvalue, match.group(), bl_rx[matchrx]))
+-    #        return True
+-
+     # Check against DNSWL/BL
+-    if dnsl_check(config['dnswl'], testvalue, checkip):
++    if dnsl_check(config['dnswl'], orgtestvalue, checkip):
+         if config['log_hits']:
+             logging.warning('{0}-WHITELIST-DNSL-HIT: \"{1}\"'.format(valuetype, testvalue))
+         return False
+ 
+-    if dnsl_check(config['dnsbl'], testvalue, checkip):
++    if dnsl_check(config['dnsbl'], orgtestvalue, checkip):
+         if config['log_hits']:
+             logging.warning('{0}-BLACKLIST-DNSL-HIT: \"{1}\"'.format(valuetype, testvalue))
+         return True
+@@ -1078,9 +1046,7 @@ def check_dom(valuetype, testvalue, domlist, listname, onlyparent, smart):
+     '''Match domain against list, works for subdomains too'''
+     cachename = 'DOM#{0}#{1}#{2}'.format(listname or 'NONE', valuetype, testvalue)
+     if cachename in check_cache:
+-        result = check_cache.get(cachename, False)
+-        #logging.info('{0}-CACHE-CHECKDOM-HIT [{1}]: \"{2}\" = \"{3}\" ({4})'.format(valuetype, listname or 'NONE', testvalue, result or 'NOT-LISTED', cachename))
+-        return result
++        return check_cache.get(cachename, False)
+ 
+     if onlyparent is not True and testvalue in domlist:
+         if config['log_hits'] and listname:
+@@ -1094,20 +1060,33 @@ def check_dom(valuetype, testvalue, domlist, listname, onlyparent, smart):
+         return fqdn
+ 
+     if smart:
+-        valuetest = testvalue.rstrip('.')
+-        while valuetest.count('.') > 1:
+-            valuetest = '.'.join(valuetest.split('.')[:-1])
+-            fqdn = check_dom_walk(valuetype, '{0}.'.format(valuetest), domlist, False, onlyparent)
+-            if fqdn and fqdn.count('.') > 1:
+-                if config['log_hits'] and listname:
+-                    logging.warning('{0}-SMARTDOM-HIT [{1}]: \"{2}\" -> \"{3}\"'.format(valuetype, listname, testvalue, fqdn))
+-                return fqdn
+-                check_cache[cachename] = fqdn
++        fqdn = check_dom_smart(valuetype, testvalue, domlist, listname, onlyparent)
++        if fqdn:
++            return fqdn
+ 
+     check_cache[cachename] = False
+     return False
+ 
+ 
++def check_dom_smart(valuetype, testvalue, domlist, listname, onlyparent):
++    cachename = 'SMARTDOM#{0}#{1}#{2}'.format(listname or 'NONE', valuetype, testvalue)
++    if cachename in check_cache:
++        return check_cache.get(cachename, False)
++
++    valuetest = testvalue.rstrip('.')
++    while valuetest.count('.') > 1:
++        valuetest = '.'.join(valuetest.split('.')[:-1])
++        #logging.info('{0}-SMARTDOM: Checking {1}.'.format(listname, valuetest))
++        fqdn = check_dom_walk(valuetype, '{0}.'.format(valuetest), domlist, False, False)
++        if fqdn and fqdn.count('.') > 1:
++            if config['log_hits'] and listname:
++                logging.warning('{0}-SMARTDOM-HIT [{1}]: \"{2}\" -> \"{3}\"'.format(valuetype, listname, testvalue, fqdn))
++            check_cache[cachename] = fqdn
++            return fqdn
++
++    return False
++
++
+ def check_dom_walk(valuetype, testvalue, domlist, listname, onlyparent):
+     fqdn = ''
+     for label in filter(None, testvalue.strip('.').split('.')[::-1]):
+@@ -1617,6 +1596,9 @@ def dns_query(name, rdclass, rdtype, qid, cip, unfilter, fttl):
+ 
+ 
+     matchf = check_dom('NAME', qname, forwarder, 'FORWARDER', False, False)
++    if matchf and config['smartdoms'] and check_dom_smart('FORWARDER', qname, bl_dom, 'FORWARDER-BLACKLIST', True):
++        matchf = False
++
+     if rv is None and config['filtering'] and config['filter_request'] and unfilter is False and matchf is False:
+         #logging.debug('REQUEST-QNAME-CHECK [{0}]: {1}'.format(qid, qname))
+ 
+@@ -2861,7 +2843,7 @@ if __name__ == '__main__':
+     config['use_quick_regex'] = True
+ 
+     # Smart domains (walk domains to see if blacklisted domains are prepended)
+-    config['smartdoms'] = True
++    config['smartdoms'] = False
+ 
+     # Fix NOERROR and zero answer answers to NXDOMAIN
+     config['fix_noerror'] = False

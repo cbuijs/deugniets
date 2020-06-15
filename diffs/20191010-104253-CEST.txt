@@ -1,0 +1,13 @@
+diff --git a/deugniets.py b/deugniets.py
+index 2ff9850..fa23597 100755
+--- a/deugniets.py
++++ b/deugniets.py
+@@ -1,7 +1,7 @@
+ #!/usr/bin/env python3
+ '''
+ =======================================================================
+- deugniets.py v2.331-20191010 Copyright 2019 by cbuijs@chrisbuijs.com
++ deugniets.py v2.332-20191010 Copyright 2019 by cbuijs@chrisbuijs.com
+ =======================================================================
+ 
+  Based on: https://github.com/supriyo-biswas/adblock-dns-server

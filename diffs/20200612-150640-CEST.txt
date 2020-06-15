@@ -1,0 +1,13 @@
+diff --git a/deugniets.py b/deugniets.py
+index 0d4e71b..58af98f 100644
+--- a/deugniets.py
++++ b/deugniets.py
+@@ -1638,7 +1638,7 @@ def geosteer(cip, qname, answer):
+                             geodata.add(geoname)
+                 
+                 if newrrdata and geodata and len(newrrdata) < len(rrdatalist):
+-                    logging.info('GEO-STEER: {0}/{1} from {2} to {3} answers (Client {4} ~ {5})'.format(rrname, rdtypet, len(rrdatalist), len(newrrdata), cip, ', '.join(geodata)))
++                    logging.info('GEO-STEERED: {0}/{1} from {2} to {3} answers (Client {4} ~ {5})'.format(rrname, rdtypet, len(rrdatalist), len(newrrdata), cip, ', '.join(geodata)))
+                     rrdatalist = newrrdata
+ 
+                 new_answer.append(dns.rrset.from_text_list(rrname, ttl, 'IN', rdtypet, rrdatalist))

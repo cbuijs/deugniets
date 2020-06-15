@@ -1,0 +1,111 @@
+diff --git a/deugniets.py b/deugniets.py
+index 86210c0..57dc4ff 100644
+--- a/deugniets.py
++++ b/deugniets.py
+@@ -1,7 +1,7 @@
+ #!/usr/bin/env python3
+ '''
+ =======================================================================
+- deugniets.py v2.592-20191126 Copyright 2019 by cbuijs@chrisbuijs.com
++ deugniets.py v2.593-20191126 Copyright 2019 by cbuijs@chrisbuijs.com
+ =======================================================================
+ 
+  Based on: https://github.com/supriyo-biswas/adblock-dns-server
+@@ -726,7 +726,10 @@ def is_blacklisted(value, valuetype, checkip):
+     if config['filtering'] is False:
+         return None
+ 
+-    testvalue = regex.split('\s+', str(value))[-1].lower()
++    if checkip:
++        testvalue = str(value)
++    else:
++        testvalue = regex.split('\s+', str(value))[-1].lower()
+ 
+     #logging.debug('{0}-BLACKLIST-CHECK: {1}'.format(valuetype, testvalue))
+ 
+@@ -1487,7 +1490,7 @@ def dns_query(name, rdclass, rdtype, qid, cip, unfilter, fttl):
+                     if returnstatus != 'OK': # eg, not WHITELISTED
+                         status = False
+                     else:
+-                        for rrset in response.answer:
++                        for rrset in response.answer: # + response.authority + response.additional:
+                             rdtype = dns.rdatatype.to_text(rrset.rdtype)
+                             rrname = str(rrset.name)
+                             if rrname not in seen:
+@@ -1509,8 +1512,7 @@ def dns_query(name, rdclass, rdtype, qid, cip, unfilter, fttl):
+                                            break
+ 
+                             if rdtype in ('A', 'AAAA', 'CNAME', 'MX', 'NS', 'PTR', 'SRV'):
+-                                orgrrset = rrset
+-                                for rr in orgrrset:
++                                for rr in rrset.copy():
+                                     if hasattr(rr, 'target'):
+                                         target = str(rr.target)
+                                     elif hasattr(rr, 'address'):
+@@ -1534,14 +1536,21 @@ def dns_query(name, rdclass, rdtype, qid, cip, unfilter, fttl):
+                                             if rdtype in ('A', 'AAAA'):
+                                                 status = is_blacklisted(target, 'DATA', True)
+                                             else:
+-                                                status = is_blacklisted(target, 'DATA', False)
++                                                status = is_blacklisted(target, 'DATA-NAME', False)
+ 
+                                             if status is not None:
+                                                 if status is True: # Blacklisted
+-                                                    if config['removeip'] and rdtype in ('A', 'AAAA'): # Remove IP from answer instead of blocking whole
+-                                                        status = None
+-                                                        logging.warning('REMOVE-IP: {0}'.format(target))
++                                                    if config['remove_ip'] and rdtype in ('A', 'AAAA'): # Remove IP from answer instead of blocking whole
+                                                         rrset.remove(rr)
++                                                        rrcount = len(rrset)
++                                                        logging.warning('REMOVED-IP: Removed {0} from {1} ({2} left)'.format(target, rrname, rrcount))
++                                                        if rrcount == 0:
++                                                            returnstatus = 'BLACKLISTED'
++                                                            blacklistname = target
++                                                            break
++
++                                                        status = None
++
+                                                     else:
+                                                         returnstatus = 'BLACKLISTED'
+                                                         blacklistname = target
+@@ -1587,7 +1596,6 @@ def dns_query(name, rdclass, rdtype, qid, cip, unfilter, fttl):
+             logging.info('FIX-NOERROR-ZERO-ANSWER [{0}]: {1} NOERROR -> NXDOMAIN'.format(qid, cachename))
+             rcode = dns.rcode.NXDOMAIN
+             rv = (dns.rcode.NXDOMAIN, rv[1], rv[2], rv[3])
+-
+         elif config['fix_nxdomain'] and rcode == dns.rcode.NXDOMAIN:
+             logging.info('FIX-NXDOMAIN [{0}]: {1} NXDOMAIN -> NOERROR/NODATA'.format(qid, cachename))
+             rcode = dns.rcode.NOERROR
+@@ -1977,7 +1985,6 @@ def handle_query(raw_data, client_ip):
+     if config['log_requests']:
+         logging.info('REQUEST [{0}]: {1} from {2} ({3} queries)'.format(query.id, queryname, cip, queryhits.get(queryname, 0)))
+ 
+-    response = make_response(query)
+     servfail = False
+ 
+     if query.opcode() != 0: # Must be a query
+@@ -2022,10 +2029,11 @@ def handle_query(raw_data, client_ip):
+     if config['min_resp'] and result[0] == 0:
+         result = (result[0], result[1], [], [])
+ 
+-    response.set_rcode(result[0])
+-    response.answer = result[1]
+-    response.authority = result[2]
+-    response.additional = result[3]
++    response = make_response(query)
++    response.set_rcode(result[0]) or dns.rcode.SERVFAIL
++    response.answer = result[1] or []
++    response.authority = result[2] or []
++    response.additional = result[3] or []
+ 
+     #logging.debug('RESPONSE-FLAGS-TO-CLIENT [{0}]: {1}'.format(query.id, dns.flags.to_text(response.flags)))
+ 
+@@ -2234,7 +2242,7 @@ if __name__ == '__main__':
+     config['ignoreip'] = False
+     config['blockweird'] = True
+     config['check_iprev'] = False
+-    config['removeip'] = True
++    config['remove_ip'] = True
+ 
+     # 0x20 encoding
+     config['0x20'] = False

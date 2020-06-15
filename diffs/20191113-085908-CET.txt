@@ -1,0 +1,432 @@
+diff --git a/deugniets.conf b/deugniets.conf
+index f4169c0..af11e1f 100644
+--- a/deugniets.conf
++++ b/deugniets.conf
+@@ -14,7 +14,7 @@ port = 53001
+ #nameservers = ["https://cloudflare-dns.com/dns-query", "https://dns10.quad9.net/dns-query", "https://dns.google/dns-query"]
+ #nameservers = ["https://cloudflare-dns.com/dns-query"]
+ #nameservers = ["https://cloudflare-dns.com/dns-query", "dns://1.1.1.1", "dns://1.0.0.1"]
+-nameservers = ["https://dns.google/dns-query"]
++#nameservers = ["https://dns.google/dns-query"]
+ 
+ #nameservers = ["https://dns.quad9.net/dns-query"]
+ #bootstrap = ["9.9.9.9", "149.112.112.112", "2620:fe::9", "2620:fe::fe"]
+@@ -28,8 +28,9 @@ nameservers = ["https://dns.google/dns-query"]
+ #nameservers = ["https://dns.nextdns.io/65fef9/https-nuc"]
+ #nameservers = ["127.0.0.1", "::1"]
+ 
++#nameservers = ["https://ipv4.dns.nextdns.io/126ab2/nuc-deugniets-https4", "https://ipv6.dns.nextdns.io/126ab2/nuc-deugniets-https6", "45.90.28.131", "45.90.30.131", "2a07:a8c0::12:6ab2", "2a07:a8c1::12:6ab2"]
+ #nameservers = ["https://dns.nextdns.io/126ab2/nuc-deugniets-https"]
+-#bootstrap = ["45.90.28.131", "45.90.30.131", "2a07:a8c0::12:6ab2", "2a07:a8c1::12:6ab2"]
++nameservers = ["45.90.28.131", "45.90.30.131", "2a07:a8c0::12:6ab2", "2a07:a8c1::12:6ab2"]
+ 
+ # DNS Servers to forward to
+ #nameservers = ["1.1.1.1", "1.0.0.1", "8.8.8.8", "8.8.4.4", "9.9.9.10", "149.112.112.10"]
+@@ -124,6 +125,6 @@ optimize = false
+ #whitelist = ["/opt/deugniets/alias.list", "/opt/accomplist/deugniets/plain.white.regex.list", "/opt/accomplist/deugniets/optimized.white.domain.list", "/opt/accomplist/deugniets/plain.white.ip4cidr.list", "/opt/accomplist/deugniets/plain.white.ip6cidr.list"]
+ #blacklist = ["/opt/accomplist/chris/regex.black", "/opt/accomplist/deugniets/plain.black.regex.list", "/opt/accomplist/deugniets/optimized.black.domain.list", "/opt/accomplist/deugniets/plain.black.ip4cidr.list", "/opt/accomplist/deugniets/plain.black.ip6cidr.list"]
+ 
+-whitelist = ["/opt/deugniets/alias.list", "/opt/deugniets/doh.alias.list", "/opt/accomplist/chris/connectivity-check.list", "/opt/accomplist/dnsdist/deugniets.white.list", "/opt/accomplist/chris/white.special", "/opt/accomplist/chris/private-addresses.list"]
+-blacklist = ["/opt/deugniets/black.list", "/opt/accomplist/dnsdist/deugniets.black.list","/opt/accomplist/family-safe/deugniets.black.list", "/opt/accomplist/malicious-ip/deugniets.black.list", "/opt/accomplist/testip.list"]
++whitelist = ["/opt/deugniets/forwarders.list", "/opt/deugniets/alias.list", "/opt/deugniets/unfilter.list", "/opt/deugniets/doh.alias.list", "/opt/accomplist/chris/connectivity-check.list", "/opt/accomplist/deugniets/deugniets.white.list", "/opt/accomplist/chris/white.special", "/opt/accomplist/chris/private-addresses.list"]
++#blacklist = ["/opt/deugniets/black.list", "/opt/accomplist/deugniets/deugniets.black.list","/opt/accomplist/family-safe/deugniets.black.list", "/opt/accomplist/malicious-ip/deugniets.black.list"]
+ 
+diff --git a/deugniets.py b/deugniets.py
+index d106142..2c42785 100644
+--- a/deugniets.py
++++ b/deugniets.py
+@@ -1,7 +1,7 @@
+ #!/usr/bin/env python3
+ '''
+ =======================================================================
+- deugniets.py v2.398-20191029 Copyright 2019 by cbuijs@chrisbuijs.com
++ deugniets.py v2.50-20191113 Copyright 2019 by cbuijs@chrisbuijs.com
+ =======================================================================
+ 
+  Based on: https://github.com/supriyo-biswas/adblock-dns-server
+@@ -56,7 +56,7 @@ import dns.resolver
+ import dns.rdatatype
+ import dns.exception
+ import dns.rdataclass
+-import dns.renderer
++#import dns.renderer
+ 
+ # Process EDNS Clienti SubNet Option
+ import clientsubnetoption
+@@ -127,8 +127,7 @@ command_acl6['0::1/128'] = True
+ dummy = '#!#!DUMMY!#!#'
+ 
+ # Domain Regex
+-is_dom = regex.compile('(?=^.{1,253}[a-z][\.]*$)(^((?!-)[a-z0-9_-]{0,62}[a-z0-9]\.)*(xn--[a-z0-9-]{1,59}|[a-z]{2,63})[\.]*$)', regex.I) # Including underscore
+-#is_dom = regex.compile('(?=^.{1,253}[a-z][\.]*$)(^((?!-)[a-z0-9-]{0,62}[a-z0-9]\.)*(xn--[a-z0-9-]{1,59}|[a-z]{2,63})[\.]*$)', regex.I)
++is_dom = regex.compile('(?=^.{1,253}[a-z][\.]*$)(^((?!-)[a-z0-9_-]{0,62}[a-z0-9]\.)*(xn--[a-z0-9-]{1,59}|[a-z]{2,63})[\.]*$)', regex.I) # Includes underscore
+ 
+ # Domain words
+ is_domword = regex.compile('^\*[a-z0-9\-]+$', regex.I)
+@@ -150,14 +149,17 @@ iparpa = regex.compile('^(' + ip4arpa_rx + '|' + ip6arpa_rx + ')\.arpa[\.]*$', r
+ # Returncodes
+ is_rc = regex.compile('^(NODATA|NOERROR|NXDOMAIN|RANDOM|REFUSED|SERVFAIL)$', regex.I)
+ 
++# Dom
++is_dom_txt = '^((?!-)[a-z0-9_-]{0,62}[a-z0-9]\.)*(xn--[a-z0-9-]{1,59}|[a-z]{2,63})[\.]*' # Includes underscore
++
+ # Alias
+-is_alias = regex.compile('^((?!-)[a-z0-9_-]{0,62}[a-z0-9]\.)*(xn--[a-z0-9-]{1,59}|[a-z]{2,63})[\.]*\s*=\s*.+$', regex.I)
++is_alias = regex.compile(is_dom_txt + '\s*=\s*.+$', regex.I)
+ 
+ # Forwarder
+-is_forwarder = regex.compile('^((?!-)[a-z0-9_-]{0,62}[a-z0-9]\.)*(xn--[a-z0-9-]{1,59}|[a-z]{2,63})[\.]*\s*>\s*.+$', regex.I)
++is_forwarder = regex.compile(is_dom_txt + '\s*>\s*.+$', regex.I)
+ 
+ # TTL
+-is_ttl = regex.compile('^((?!-)[a-z0-9_-]{0,62}[a-z0-9]\.)*(xn--[a-z0-9-]{1,59}|[a-z]{2,63})[\.]*\s*!\s*[0-9]+$', regex.I)
++is_ttl = regex.compile(is_dom_txt + '\s*!\s*[0-9]+$', regex.I)
+ 
+ # Test if alias/forwarder/ttl
+ is_aft = regex.compile('^(\+|.*[=>!]).*$', regex.I)
+@@ -166,7 +168,10 @@ is_aft = regex.compile('^(\+|.*[=>!]).*$', regex.I)
+ is_unfilter = regex.compile('^\+.*$', regex.I)
+ 
+ # Is DoH or DoT
++#is_dox = regex.compile("^(dns|https|tls)://(?!(do[ht]|ip(v)*)[46]\.).*$", regex.I)
+ is_dox = regex.compile("^(dns|https|tls)://.*$", regex.I)
++is_dox4 = regex.compile("^(dns|https|tls)://(do[ht]|ip(v)*)4\..*$", regex.I)
++is_dox6 = regex.compile("^(dns|https|tls)://(do[ht]|ip(v)*)6\..*$", regex.I)
+ 
+ #####################################################################
+ 
+@@ -176,6 +181,7 @@ def setup_nameservers():
+     if 'nameservers' in config:
+         dns.resolver.default_resolver = dns.resolver.Resolver(configure=False)
+         dns.resolver.default_resolver.nameservers = config['nameservers']
++        dns.resolver.default_resolver.port = 53
+         dns.resolver.default_resolver.use_edns(0, 0, 1220) # DNSFLag Day 2020 advice
+         dns.resolver.default_resolver.timeout = 3
+         dns.resolver.default_resolver.lifetime = 15
+@@ -449,7 +455,7 @@ def read_list(filenames, listname, domlst, ip4lst, ip6lst, rxlst, unlst, unip4,
+                         else:
+                             logging.warning('LIST ({0}) [#{1}]: Invalid UnFilter Syntax: \"{2}\"'.format(lname, count, line))
+ 
+-                    elif (not is_ip.search(entry)) and (not is_dom.search(entry)) and (not is_aft.search(entry)):
++                    elif (not is_ip.search(entry)) and (not is_dom.search(entry)): # and (not is_aft.search(entry)):
+                         if entry.startswith('/') and entry.endswith('/'):
+                             entry = entry.strip('/')
+ 
+@@ -518,7 +524,7 @@ def get_lines(filename, listname):
+ 
+ 
+ def uniq(lst, lstname):
+-    return list(dict.fromkeys(lst, lstname))
++    return list(filter(None, list(dict.fromkeys(lst, lstname))))
+     #seen = set()
+     #newlst = list([x for x in lst if x and x not in seen and not seen.add(x) and not x.startswith('#')])
+     #logging.debug('UNIQ [{0}]: Number of lines went from {1} to {2} ({3})'.format(lstname, len(lst), len(newlst), len(newlst) - len(lst)))
+@@ -557,7 +563,7 @@ def roundrobin(lst):
+             r = 1
+ 
+         #return lst[1:] + lst[:1]
+-        return lst[r:] + lst[:r]
++        return list(filter(None, lst[r:] + lst[:r]))
+ 
+     return lst
+ 
+@@ -783,7 +789,6 @@ def check_if_blacklisted(testvalue, valuetype, checkip):
+     # Check against domain
+     if checkip is False and is_dom.search(testvalue):
+         #logging.debug('CHECK-{0}: \"{1}\" is a DOMAIN'.format(valuetype, testvalue))
+-
+         if check_dom(valuetype, testvalue, wl_dom, 'WHITELIST', False, False): # Whitelisted
+             if config['smartdoms'] and (check_dom(valuetype, testvalue, bl_dom, 'BLACKLIST', False, True) or check_rx(valuetype, testvalue, bl_rx, 'BLACKLIST')): # Blacklisted
+                 return True
+@@ -1088,6 +1093,7 @@ def dns_request(qid, cachename, qname, rdtype, addrs):
+ 
+     try:
+         dns.resolver.default_resolver.nameservers = addrs
++        dns.resolver.default_resolver.port = 53
+         result = dns.resolver.query(encode_0x20(qname), rdtype, raise_on_no_answer=True)
+         if result:
+             rcode = result.response.rcode
+@@ -1254,8 +1260,8 @@ def dns_query(name, rdclass, rdtype, qid, cip, unfilter, fttl):
+         if config['parent_cache_hit'] is not True:
+             break
+ 
+-
+-    if rv is None and config['filter_request'] and unfilter is False:
++    matchf = check_dom('NAME', qname, forwarder, 'FORWARDER', False, False)
++    if rv is None and config['filtering'] and config['filter_request'] and unfilter is False and (not matchf):
+         #logging.debug('REQUEST-QNAME-CHECK [{0}]: {1}'.format(qid, qname))
+ 
+         wmatch = is_blacklisted(qname, 'NAME', False) # Due first, faster due to caching of previous results
+@@ -1367,8 +1373,8 @@ def dns_query(name, rdclass, rdtype, qid, cip, unfilter, fttl):
+ 
+         ### !!! TODO: add PORT as option, default 53
+         ### !!! TODO: Optimize return of below NXDOMAIN and REFUSED to skip forwardinf and cache
+-        match = check_dom('NAME', qname, forwarder, 'FORWARDER', False, False)
+-        if match:
++        #matchf = check_dom('NAME', qname, forwarder, 'FORWARDER', False, False)
++        if matchf:
+             #chop = qname[:-len(match)]
+             #logging.debug('CHOP: {0} - {1}'.format(qname, chop))
+             #if is_blacklisted(chop, 'FORWARDER-CHOP-NAME', False):
+@@ -1378,40 +1384,45 @@ def dns_query(name, rdclass, rdtype, qid, cip, unfilter, fttl):
+             #else:
+ 
+             fwdtag = 'SELECTIVE'
+-            addrs = ip_family(cachename, forwarder[match].split(','), cip)
++            #addrs = ip_family(cachename, forwarder[match].split(','), cip)
++            addrs = roundrobin(forwarder[matchf].split(','))
+             if cip in addrs:
+-                logging.error('FORWARD-LOOP [{0}]: \"{1}\" from {2} (forwarder for {3})'.format(qid, cachename, cip, match))
++                logging.error('FORWARD-LOOP [{0}]: \"{1}\" from {2} (forwarder for {3})'.format(qid, cachename, cip, matchf))
+                 return (dns.rcode.SERVFAIL, [], [], [])
+-
+-            forwarder[match] = ','.join(addrs)
++            forwarder[matchf]= ', '.join(addrs) # Preserve roundrobin order
+ 
+         if rv is None and addrs is False:
+             match = 'DEFAULT'
+             if config['safe_nameservers'] and (returnstatus == 'WHITELISTED' or unfilter):
+-                addrs = ip_family(cachename, roundrobin(config['safe_nameservers']), cip)
+-                config['safe_nameservers'] = addrs
++                #addrs = ip_family(cachename, roundrobin(config['safe_nameservers']), cip)
++                addrs = roundrobin(config['safe_nameservers'])
++                config['safe_nameservers'] = addrs # Preserve roundrobin order
+             else:
+-                addrs = ip_family(cachename, roundrobin(config['nameservers']), cip)
+-                config['nameservers'] = addrs
++                #addrs = ip_family(cachename, roundrobin(config['nameservers']), cip)
++                addrs = roundrobin(config['nameservers'])
++                config['nameservers'] = addrs # Preserve roundrobin order
+ 
+ 
+-    if rv is None:
++    if rv is None and addrs:
+         result = False
+         response = None
+ 
++        response, rcode = dox_request(qid, qname, rdtype, cachename, ip_family(cachename, addrs, cip), False)
++
+         #rttstart = time.time()
+ 
+-        doxaddrs = list(filter(is_dox.search, addrs))
+-        if doxaddrs:
+-            ### !!!! WORK IN PROGRESS: DoH
+-            response, rcode = dox_request(qid, qname, rdtype, cachename, doxaddrs, False)
+-        else:
+-            if config['log_forwards']:
+-                logging.info('{0}-FORWARDER [{1}]: Forwarding \"{2}\" to \"{3}\" ({4})'.format(fwdtag, qid, cachename, ', '.join(addrs), match))
+-        
+-            result, rcode = dns_request(qid, cachename, qname, rdtype, addrs)
+-            if result:
+-                response = result.response
++        ### !!! NEEDS WORK: Ineeficient ip_family when mixed
++        #doxaddrs = list(filter(is_dox.search, addrs)) #+ list(filter(is_dox4.search, addrs)) + list(filter(is_dox6.search, addrs))
++        #if doxaddrs:
++        #    ### !!!! WORK IN PROGRESS: DoH
++        #    response, rcode = dox_request(qid, qname, rdtype, cachename, ip_family(cachename, doxaddrs, cip), False)
++        #else:
++        #    if config['log_forwards']:
++        #        logging.info('{0}-FORWARDER [{1}]: Forwarding \"{2}\" to \"{3}\" ({4})'.format(fwdtag, qid, cachename, ', '.join(addrs), match))
++       # 
++       #     result, rcode = dns_request(qid, cachename, qname, rdtype, addrs)
++       #     if result:
++       #         response = result.response
+ 
+         #rttend = time.time()
+         #logging.info('RTT [{0}]: Resolving {1} took {2} msec'.format(qid, cachename, round((rttend - rttstart) * 1000)))
+@@ -1441,7 +1452,7 @@ def dns_query(name, rdclass, rdtype, qid, cip, unfilter, fttl):
+             if response.answer and rcode == 'NOERROR':
+                 status = None
+ 
+-                if config['filter_response'] and unfilter is False:
++                if fwdtag in ('DEFAULT', 'GLOBAL') and config['filtering'] and config['filter_response'] and unfilter is False:
+                     response.answer = normttl(qname, response.answer, qid, fttl)
+                     if returnstatus != 'OK': # eg, not WHITELISTED
+                         status = False
+@@ -1623,79 +1634,87 @@ def dox_request(qid, qname, rdtype, cachename, urls, rfc8484):
+ 
+     retries = 0
+     while retries < 3:
+-        for url in urls:
+-            retries += 1
++        for url in filter(None, urls):
++            if url:
++                retries += 1
+ 
+-            # DOH
+-            if url.startswith('https://'):
+-                message = dns.message.make_query(encode_0x20(qname), rdtype)
+-                message.id = 0 # DoH requests that
+-                rcode = 500
++                # DOH
++                if url.startswith('https://'):
++                    message = dns.message.make_query(encode_0x20(qname), rdtype)
++                    message.id = 0 # DoH requests that
++                    rcode = 500
+ 
+-                if rfc8484: # Use GET
+-                    if config['log_forwards']:
+-                        logging.info('DOH-QUERY-GET [#{0}]: Query for {1}/IN/{2} to {3}'.format(retries, qname, dns.rdatatype.to_text(rdtype), url))
++                    if rfc8484: # Use GET
++                        if config['log_forwards']:
++                            logging.info('DOH-QUERY-GET [#{0}]: Query for {1}/IN/{2} to {3}'.format(retries, qname, dns.rdatatype.to_text(rdtype), url))
+ 
+-                    headers = {'User-Agent': config['useragent'], 'Accept': 'application/dns-message', 'Content-type': 'application/dns-message'}
+-                    dns_req = base64.urlsafe_b64encode(message.to_wire()).decode('UTF8').rstrip('=')
+-                    fullurl = '{0}?ct&dns={1}'.format(url, dns_req)
++                        headers = {'User-Agent': config['useragent'], 'Accept': 'application/dns-message', 'Content-type': 'application/dns-message'}
++                        dns_req = base64.urlsafe_b64encode(message.to_wire()).decode('UTF8').rstrip('=')
++                        fullurl = '{0}?ct&dns={1}'.format(url, dns_req)
+ 
+-                    try:
+-                        r = requests_session.get(fullurl, timeout=5, headers=headers, allow_redirects=False, proxies=None)
+-                        if r:
+-                            rcode = r.status_code
+-                    except BaseException as err:
+-                        logging.error('DOH-ERROR-GET: Query for {0}/IN/{1} to {2} - {3}'.format(qname, dns.rdatatype.to_text(rdtype), url, err))
++                        try:
++                            r = requests_session.get(fullurl, timeout=5, headers=headers, allow_redirects=False, proxies=None)
++                            if r:
++                                rcode = r.status_code
++                        except BaseException as err:
++                            logging.error('DOH-ERROR-GET: Query for {0}/IN/{1} to {2} - {3}'.format(qname, dns.rdatatype.to_text(rdtype), url, err))
+ 
+-                else: # Use POST (Prefered)
+-                    if config['log_forwards']:
+-                        logging.info('DOH-QUERY-POST [#{0}]: Query for {1}/IN/{2} to {3}'.format(retries, qname, dns.rdatatype.to_text(rdtype), url))
+-
+-                    headers = {'User-Agent': config['useragent'], 'Accept': 'application/dns-udpwireformat', 'Content-type': 'application/dns-udpwireformat'}
+-
+-                    try:
+-                        r = requests.post(url, data=message.to_wire(), timeout=5, headers=headers, allow_redirects=False, proxies=None)
+-                        if r:
+-                            rcode = r.status_code
+-                    except BaseException as err:
+-                        logging.error('DOH-ERROR-POST: Query for {0}/IN/{1} to {2} - {3}'.format(qname, dns.rdatatype.to_text(rdtype), url, err))
+-
+-                if rcode == 500:
+-                    logging.warning('DOH-INFO: Re-initiating session')
+-                    requests_session.close()
+-                    requests_session = requests.Session()
+-                    requests_session.mount('https://', HTTP20Adapter())
+-
+-                elif rcode == 200:
+-                    #body = answerbuffer.getvalue() # Pycurl
+-                    body = r.content
+-                    if body:
+-                        response = dns.message.from_wire(body)
+-                        if response:
+-                            if response.rcode() == dns.rcode.NOERROR:
+-                                return response, dns.rcode.NOERROR
+-                            else:
+-                                return None, response.rcode()
++                    else: # Use POST (Prefered)
++                        if config['log_forwards']:
++                            logging.info('DOH-QUERY-POST [#{0}]: Query for {1}/IN/{2} to {3}'.format(retries, qname, dns.rdatatype.to_text(rdtype), url))
+ 
+-                    return None, dns.rcode.NXDOMAIN
++                        headers = {'User-Agent': config['useragent'], 'Accept': 'application/dns-udpwireformat', 'Content-type': 'application/dns-udpwireformat'}
+ 
+-                elif rcode in (401, 403):
+-                    return None, dns.rcode.REFUSED
++                        try:
++                            r = requests.post(url, data=message.to_wire(), timeout=5, headers=headers, allow_redirects=False, proxies=None)
++                            if r:
++                                rcode = r.status_code
++                        except BaseException as err:
++                            logging.error('DOH-ERROR-POST: Query for {0}/IN/{1} to {2} - {3}'.format(qname, dns.rdatatype.to_text(rdtype), url, err))
++
++                    if rcode == 500:
++                        logging.warning('DOH-INFO: Re-initiating session')
++                        requests_session.close()
++                        requests_session = requests.Session()
++                        requests_session.mount('https://', HTTP20Adapter())
++
++                    elif rcode == 200:
++                        #body = answerbuffer.getvalue() # Pycurl
++                        body = r.content
++                        if body:
++                            response = dns.message.from_wire(body)
++                            if response:
++                                if response.rcode() == dns.rcode.NOERROR:
++                                    return response, dns.rcode.NOERROR
++                                else:
++                                    return None, response.rcode()
++
++                        return None, dns.rcode.NXDOMAIN
++
++                    elif rcode in (401, 403):
++                        return None, dns.rcode.REFUSED
+ 
+-            # TLS !!! NEEDS WORK - DOES NOT WORK !!!
+-            elif url.startswith('tls://'): # Port 853
+-                addr = regex.sub('^' + regex.escape('tls://'), '', url)
+-                if config['log_forwards']:
+-                    logging.info('DOT-QUERY [#{0}]: Query for {1}/IN/{2} to {3}'.format(retries, qname, dns.rdatatype.to_text(rdtype), addr))
+ 
+-            # DNS !!! NEEDS WORK (DNS-REQUEST Addresses stuff) - DOES NOT WORK !!!
+-            elif url.startswith('dns://') or is_ip.search(url): # Port 53
+-                addr = regex.sub('^' + regex.escape('dns://'), '', url)
+-                if config['log_forwards']:
+-                    logging.info('DNS-QUERY [#{0}]: Query for {1}/IN/{2} to {3}'.format(retries, qname, dns.rdatatype.to_text(rdtype), addr))
+-                result, rcode = dns_request(qid, cachename, qname, rdtype, list(addr))
+-                if result:
+-                    return result.response, result.response.rcode()
++                # TLS !!! NEEDS WORK - DOES NOT WORK !!!
++                elif url.startswith('tls://'): # Port 853
++                    addr = regex.sub('^' + regex.escape('tls://'), '', url)
++                    addr, port = '{0}{1}'.format(addr, '@853').split('@')[0:2]
++                    if config['log_forwards']:
++                        logging.info('DOT-QUERY [#{0}]: Query for {1}/IN/{2} to {3}@{4}'.format(retries, qname, dns.rdatatype.to_text(rdtype), addr, port))
++                    return None, dns.rcode.SERVFAIL
++                   
++
++                # DNS !!! NEEDS WORK - Process/Use port !!!
++                elif url.startswith('dns://') or is_ip.search(url): # Port 53
++                    addr = regex.sub('^' + regex.escape('dns://'), '', url)
++                    addr, port = '{0}{1}'.format(addr, '@53').split('@')[0:2]
++                    if config['log_forwards']:
++                        logging.info('DNS-QUERY [#{0}]: Query for {1}/IN/{2} to {3}@{4}'.format(retries, qname, dns.rdatatype.to_text(rdtype), addr, port))
++                    result, rcode = dns_request(qid, cachename, qname, rdtype, [addr])
++                    if result and result.response:
++                        return result.response, result.response.rcode()
++                    elif rcode:
++                        return None, rcode
+ 
+     return None, dns.rcode.SERVFAIL
+ 
+@@ -1714,24 +1733,25 @@ def ip_family(qname, addrs, cip):
+         return addrs
+ 
+     doip6 = False
++    iptag = 'IPV4'
+     if qname.endswith('/IN/AAAA') or qname.find('.ip6.arpa./IN/') > 0 or is_ip6.search(cip):
+         doip6 = True
++        iptag = 'IPV6'
+ 
+-    newaddrs = False
++    newaddrs = addrs
+     comment = 'lookup \"' + qname + '\" for ' + cip
+ 
+     if doip6:
+-        newaddrs = list(filter(is_dox.search, addrs)) + list(filter(is_ip6.search, addrs)) + list(filter(is_ip4.search, addrs))
+-        logging.info('SMART-IP-FORWARDING: IPv6 - {0}'.format(comment))
++        newaddrs = uniq(list(filter(is_dox6.search, addrs)) + list(filter(is_dox4.search, addrs)) + list(filter(is_dox.search, addrs)) + list(filter(is_ip6.search, addrs)) + list(filter(is_ip4.search, addrs)), 'IPV6')
+     else:
+-        newaddrs = list(filter(is_dox.search, addrs)) + list(filter(is_ip4.search, addrs)) + list(filter(is_ip6.search, addrs))
+-        logging.info('SMART-IP-FORWARDING: IPv4 - {0}'.format(comment))
++        newaddrs = uniq(list(filter(is_dox4.search, addrs)) + list(filter(is_dox6.search, addrs)) + list(filter(is_dox.search, addrs)) + list(filter(is_ip4.search, addrs)) + list(filter(is_ip6.search, addrs)), 'IPV4')
+ 
+-    #if newaddrs is False:
+-    #    newaddrs = addrs
+-    #    logging.info('IP-FAMILY-FORWARDING: DEFAULT - {0}'.format(comment))
++    if newaddrs:
++        logging.info('SMART-IP-FORWARDING: {0} {1} -> {2}'.format(iptag, comment, ', '.join(newaddrs)))
++        return newaddrs
+ 
+-    return newaddrs
++    logging.info('SMART-IP-FORWARDING: IPALL {0} -> {1}'.format(comment, ', '.join(addrs)))
++    return addrs
+ 
+ 
+ def countrr(rrsets):

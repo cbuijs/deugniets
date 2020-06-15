@@ -1,0 +1,451 @@
+diff --git a/deugniets.py b/deugniets.py
+index a5412bd..eb1cbbd 100644
+--- a/deugniets.py
++++ b/deugniets.py
+@@ -1,7 +1,7 @@
+ #!/usr/bin/env python3
+ '''
+ ===========================================================================
+- deugniets.py v2.653-20200102 Copyright 2019-2020 by cbuijs@chrisbuijs.com
++ deugniets.py v2.663-20200103 Copyright 2019-2020 by cbuijs@chrisbuijs.com
+ ===========================================================================
+ 
+  Based on: https://github.com/supriyo-biswas/adblock-dns-server
+@@ -25,6 +25,7 @@
+  - Listen on DoT (853) and DoH (443) - SSL/Certificate config
+  - Bootstrap servers for getaddrinfo
+  - Check/Investigate/Use Twisted names framework - Backburner
++ - Unduplicate check_dom matches - Added cache
+ 
+ Done:
+ 
+@@ -93,7 +94,7 @@ from IPy import IP
+ 
+ # Stuff needed for DoH
+ import base64
+-from hyper.contrib import HTTP20Adapter
++#from hyper.contrib import HTTP20Adapter
+ 
+ # GeoIP
+ import geoip2.database
+@@ -140,6 +141,8 @@ command_acl6['0::1/128'] = True
+ private4 = pytricia.PyTricia(32, socket.AF_INET)
+ private6 = pytricia.PyTricia(128, socket.AF_INET6)
+ 
++check_cache = dict()
++
+ # vars
+ dummy = '#!#!DUMMY!#!#'
+ 
+@@ -796,13 +799,16 @@ def check_blacklisted(value, testvalue, valuetype, checkip):
+     if checkip:
+         notip = False
+ 
+-    if config['blockip4'] and ((notip and testvalue.endswith('.in-addr.arpa.')) or is_ip4.search(testvalue)):
++    if notip and is_dom.search(testvalue) and check_dom(valuetype, testvalue, alias, 'ALIAS', False, False): # Whitelisted/ALIAS
++        return False
++
++    if config['blockip4'] and ((notip and ip4arpa.search(testvalue)) or (check_ip and is_ip4.search(testvalue))):
+         if config['log_hits']:
+-            logging.warning('RESPONSE-IPV4-HIT: {0}'.format(testvalue))
++            logging.warning('{0}-IPV4-HIT: {1}'.format(valuetype, testvalue))
+         return True
+-    elif config['blockip6'] and ((notip and testvalue.endswith('.ip6.arpa.')) or is_ip6.search(testvalue)):
++    elif config['blockip6'] and ((notip and ip6arpa.seach(testvalue)) or (check_ip and is_ip6.search(testvalue))):
+         if config['log_hits']:
+-             logging.warning('RESPONSE-IPV6-HIT: {0}'.format(testvalue))
++             logging.warning('{0}-IPV6-HIT: {1}'.format(valuetype, testvalue))
+         return True
+ 
+     if notip and config['parent_hit']:
+@@ -849,7 +855,7 @@ def check_if_blacklisted(testvalue, valuetype, checkip):
+         if config['check_tld']:
+             if not tld_rx.search(testvalue): # Invalid TLD
+                 if config['log_hits']:
+-                    logging.warning('NXTLD-HIT: {0}'.format(testvalue))
++                    logging.warning('{0}-NXTLD-HIT: {1}'.format(valuetype, testvalue))
+                 return True
+ 
+         if check_dom(valuetype, testvalue, bl_dom, 'BLACKLIST', False, config['smartdoms']): # Blacklisted
+@@ -947,16 +953,15 @@ def check_if_blacklisted(testvalue, valuetype, checkip):
+     #        return True
+ 
+     # Check against DNSWL/BL
+-    if config['use_dnsl']:
+-        if dnsl_check(config['dnswl'], testvalue, checkip):
+-            if config['log_hits']:
+-                logging.warning('{0}-WHITELIST-DNSL-HIT: \"{1}\"'.format(valuetype, testvalue))
+-            return False
++    if dnsl_check(config['dnswl'], testvalue, checkip):
++        if config['log_hits']:
++            logging.warning('{0}-WHITELIST-DNSL-HIT: \"{1}\"'.format(valuetype, testvalue))
++        return False
+ 
+-        if dnsl_check(config['dnsbl'], testvalue, checkip):
+-            if config['log_hits']:
+-                logging.warning('{0}-BLACKLIST-DNSL-HIT: \"{1}\"'.format(valuetype, testvalue))
+-            return True
++    if dnsl_check(config['dnsbl'], testvalue, checkip):
++        if config['log_hits']:
++            logging.warning('{0}-BLACKLIST-DNSL-HIT: \"{1}\"'.format(valuetype, testvalue))
++        return True
+ 
+     return None
+ 
+@@ -975,13 +980,23 @@ def check_rx(valuetype, testvalue, rxlst, tag):
+ 
+ def check_dom(valuetype, testvalue, domlist, listname, onlyparent, smart):
+     '''Match domain against list, works for subdomains too'''
++    check_name = False
++    if listname:
++        check_name = '{0}/{1}'.format(testvalue, listname)
++        if check_name in check_cache:
++            return check_cache.get(check_name, False)
++
+     if testvalue in domlist:
+         if config['log_hits'] and listname:
+             logging.warning('{0}-DOM-HIT [{1}]: \"{2}\" -> \"{2}\"'.format(valuetype, listname, testvalue))
++        if check_name:
++            check_cache[check_name] = testvalue
+         return testvalue
+ 
+     fqdn = check_dom_walk(valuetype, testvalue, domlist, listname, onlyparent)
+     if fqdn:
++        if check_name:
++            check_cache[check_name] = fqdn
+         return fqdn
+ 
+     if smart:
+@@ -993,8 +1008,12 @@ def check_dom(valuetype, testvalue, domlist, listname, onlyparent, smart):
+             if fqdn and fqdn.count('.') > 1:
+                 if config['log_hits'] and listname:
+                     logging.warning('{0}-SMARTDOM-HIT [{1}]: \"{2}\" -> \"{3}\"'.format(valuetype, listname, testvalue, fqdn))
++                if check_name:
++                    check_cache[check_name] = fqdn
+                 return fqdn
+ 
++    if check_name:
++        check_cache[check_name] = False
+     return False
+ 
+ 
+@@ -1082,19 +1101,20 @@ def check_badip(cip):
+     if config['filtering'] is False:
+         return False
+ 
+-    count = 0
+-    while count < config['retry_count'] and cip in beingchecked:
+-        count += 1
+-        logging.debug('BADIP-SLEEP: {0} (#{1})'.format(cip, count))
+-        time.sleep(config['retry_wait'])
+-
+-    if count >= config['retry_count']:
+-        logging.error('BADIP-FAIL: {0} - Took to long to check'.format(cip))
+-        return False
++    if is_ip.search(cip):
++        count = 0
++        while count < config['retry_count'] and cip in beingchecked:
++            count += 1
++            logging.debug('BADIP-SLEEP: {0} (#{1})'.format(cip, count))
++            time.sleep(config['retry_wait'])
++
++        if count >= config['retry_count'] and cip in beingchecked:
++            logging.error('BADIP-FAIL: {0} - Took to long to check'.format(cip))
++            beingchecked.discard(cip)
++            return False
+ 
+-    beingchecked.add(cip)
++        beingchecked.add(cip)
+ 
+-    if is_ip.search(cip):
+         if cip.find(':') > 0:
+             wl_ip = wl_ip6
+             bl_ip = bl_ip6
+@@ -1131,7 +1151,8 @@ def check_badip(cip):
+                 count += 1
+ 
+                 try:
+-                    response = abuseipdb_session.get(url, timeout=5, headers=headers, params=querystring, allow_redirects=False, proxies=None, stream=True)
++                    #response = abuseipdb_session.get(url, timeout=5, headers=headers, params=querystring, allow_redirects=False, proxies=None, stream=True)
++                    response = requests.get(url, timeout=5, headers=headers, params=querystring, allow_redirects=False, proxies=None)
+                     if response.status_code == 200:
+                         limit = int(response.headers['X-RateLimit-Limit'])
+                         remain = int(response.headers['X-RateLimit-Remaining'])
+@@ -1168,7 +1189,7 @@ def check_badip(cip):
+ 
+         if dnsl_check(config['dnsbl'], cip, True):
+             if config['log_hits']:
+-                logging.warning('ACL-DNSBL-BLACKLIST-HIT: {1}'.format(cip))
++                logging.warning('ACL-DNSBL-BLACKLIST-HIT: {0}'.format(cip))
+             bl_ip[cip] = True
+             beingchecked.discard(cip)
+             return True
+@@ -1234,7 +1255,7 @@ def collapse(name, answer, qid):
+ 
+ # !!!! NEEDS WORK !!!!
+ def dnsl_check(dnsl, value, isip):
+-    if config['nameservers'] and (not iparpa.search(value)):
++    if config['use_dnsl'] and config['nameservers'] and (not iparpa.search(value)):
+         for service in dnsl:
+             servicename, servicetype, domain = '{0}::'.format(service).lower().split(':')[0:3]
+             if servicename and servicetype and domain and (not value.endswith('.' + domain)):
+@@ -1824,7 +1845,7 @@ def dns_query(name, rdclass, rdtype, qid, cip, unfilter, fttl):
+ # !!!! WORK IN PROGRESS
+ # Code based and adapted on: https://www.bortzmeyer.org/hackathon-ietf-101.html
+ def dox_request(qid, qname, rdtype, cachename, urls, rfc8484, cip):
+-    global requests_session
++    #global requests_session
+ 
+     message = dns.message.make_query(encode_0x20(qname), rdtype)
+     # Fixup for ANY
+@@ -1835,9 +1856,9 @@ def dox_request(qid, qname, rdtype, cachename, urls, rfc8484, cip):
+ 
+     if config['use_ecs_ip'] and cip and is_ip.search(cip):
+         if cip.find(':') > 0:
+-            bits = 64 #128
++            bits = config['ecs_privacy6'] or 64
+         else:
+-            bits = 24 #32
++            bits = config['ecs_privacy4'] or 24
+ 
+         ocip = IP(cip).make_net(str(bits)).strNormal(0)
+ 
+@@ -1859,60 +1880,75 @@ def dox_request(qid, qname, rdtype, cachename, urls, rfc8484, cip):
+                 # https://github.com/rthalley/dnspython/issues/358
+                 # !!! TO-DO: Use ourselfs to resolve hostname in URL (bootstrap), or stick in hosts-file
+                 if url.startswith('https://'):
+-                    message.id = 0 # DoH requests this
+-                    rcode = 500
++                    if config['log_forwards']:
++                        logging.info('DOH-QUERY [#{0}]: Query for {1}/IN/{2} to {3}'.format(retries, qname, dns.rdatatype.to_text(rdtype), url))
+ 
+-                    if rfc8484 and (not config['nextdns']): # Use GET
+-                        if config['log_forwards']:
+-                            logging.info('DOH-QUERY-GET [#{0}]: Query for {1}/IN/{2} to {3}'.format(retries, qname, dns.rdatatype.to_text(rdtype), url))
++                    response = False
++                    try:
++                        response = dns.query.https(message, url)
+ 
+-                        headers = {'User-Agent': config['useragent'], 'Accept': 'application/dns-message', 'Content-type': 'application/dns-message'}
+-                        dns_req = base64.urlsafe_b64encode(message.to_wire()).decode('UTF8').rstrip('=')
+-                        fullurl = '{0}?ct&dns={1}'.format(url, dns_req)
++                    except BaseException as err:
++                        logging.error('DOH-ERROR: Query for {0}/IN/{1} to {2} - {3}'.format(qname, dns.rdatatype.to_text(rdtype), url, err))
+ 
+-                        try:
+-                            r = requests_session.get(fullurl, timeout=5, headers=headers, allow_redirects=False, proxies=None, stream=True)
+-                            if r:
+-                                rcode = r.status_code
+-                        except BaseException as err:
+-                            logging.error('DOH-ERROR-GET: Query for {0}/IN/{1} to {2} - {3}'.format(qname, dns.rdatatype.to_text(rdtype), url, err))
++                    if response:
++                        return response, response.rcode()
+ 
+-                    else: # Use POST (Prefered)
+-                        if config['log_forwards']:
+-                            logging.info('DOH-QUERY-POST [#{0}]: Query for {1}/IN/{2} to {3}'.format(retries, qname, dns.rdatatype.to_text(rdtype), url))
++                #elif url.startswith('https://'):
++                #    message.id = 0 # DoH requests this
++                #    rcode = 500
+ 
+-                        headers = {'User-Agent': config['useragent'], 'Accept': 'application/dns-udpwireformat', 'Content-type': 'application/dns-udpwireformat'}
++                #    if rfc8484 and (not config['nextdns']): # Use GET
++                #        if config['log_forwards']:
++                #            logging.info('DOH-QUERY-GET [#{0}]: Query for {1}/IN/{2} to {3}'.format(retries, qname, dns.rdatatype.to_text(rdtype), url))
+ 
+-                        try:
+-                            r = requests.post(url, data=message.to_wire(), timeout=5, headers=headers, allow_redirects=False, proxies=None, stream=True)
+-                            if r:
+-                                rcode = r.status_code
+-                        except BaseException as err:
+-                            logging.error('DOH-ERROR-POST: Query for {0}/IN/{1} to {2} - {3}'.format(qname, dns.rdatatype.to_text(rdtype), url, err))
+-
+-                    if rcode == 500:
+-                        logging.warning('DOH-INFO: Re-initiating session')
+-                        requests_session.close()
+-                        time.sleep(config['retry_wait'])
+-                        requests_session = requests.Session()
+-                        requests_session.mount('https://', HTTP20Adapter())
+-
+-                    elif rcode == 200:
+-                        #body = answerbuffer.getvalue() # Pycurl
+-                        body = r.content
+-                        if body:
+-                            response = dns.message.from_wire(body)
+-                            if response:
+-                                if response.rcode() == dns.rcode.NOERROR:
+-                                    return response, dns.rcode.NOERROR
+-                                else:
+-                                    return None, response.rcode()
++                #        headers = {'User-Agent': config['useragent'], 'Accept': 'application/dns-message', 'Content-type': 'application/dns-message'}
++                #        dns_req = base64.urlsafe_b64encode(message.to_wire()).decode('UTF8').rstrip('=')
++                #        fullurl = '{0}?ct&dns={1}'.format(url, dns_req)
++
++                #        try:
++                #            r = requests_session.get(fullurl, timeout=5, headers=headers, allow_redirects=False, proxies=None, stream=True)
++                #            if r:
++                #                rcode = r.status_code
++                #        except BaseException as err:
++                #            logging.error('DOH-ERROR-GET: Query for {0}/IN/{1} to {2} - {3}'.format(qname, dns.rdatatype.to_text(rdtype), url, err))
++
++                #    else: # Use POST (Prefered)
+ 
+-                        return None, dns.rcode.NXDOMAIN
++                #        if config['log_forwards']:
++                #            logging.info('DOH-QUERY-POST [#{0}]: Query for {1}/IN/{2} to {3}'.format(retries, qname, dns.rdatatype.to_text(rdtype), url))
+ 
+-                    elif rcode in (401, 403):
+-                        return None, dns.rcode.REFUSED
++                #        headers = {'User-Agent': config['useragent'], 'Accept': 'application/dns-udpwireformat', 'Content-type': 'application/dns-udpwireformat'}
+ 
++                #        try:
++                #            r = requests.post(url, data=message.to_wire(), timeout=5, headers=headers, allow_redirects=False, proxies=None, stream=True)
++                #            if r:
++                #                rcode = r.status_code
++                #        except BaseException as err:
++                #            logging.error('DOH-ERROR-POST: Query for {0}/IN/{1} to {2} - {3}'.format(qname, dns.rdatatype.to_text(rdtype), url, err))
++
++
++                #    if rcode == 500:
++                #        logging.warning('DOH-INFO: Re-initiating session')
++                #        requests_session.close()
++                #        time.sleep(config['retry_wait'])
++                #        requests_session = requests.Session()
++                #        requests_session.mount('https://', HTTP20Adapter())
++
++                #    elif rcode == 200:
++                #        #body = answerbuffer.getvalue() # Pycurl
++                #        body = r.content
++                #        if body:
++                #            response = dns.message.from_wire(body)
++                #            if response:
++                #                if response.rcode() == dns.rcode.NOERROR:
++                #                    return response, dns.rcode.NOERROR
++                #                else:
++                #                    return None, response.rcode()
++
++                #        return None, dns.rcode.NXDOMAIN
++
++                #    elif rcode in (401, 403):
++                #        return None, dns.rcode.REFUSED
+ 
+                 # TLS !!! NEEDS WORK !!! NEEDS DNSPYTHON 2.0.0 !!! OVERHAUL !!! BUGGY (Timeouts) !!! Persistent connections needed !!!
+                 elif url.startswith('tls://'): # Port 853
+@@ -1929,7 +1965,6 @@ def dox_request(qid, qname, rdtype, cachename, urls, rfc8484, cip):
+ 
+                            except BaseException as err:
+                                logging.error('DOT-QUERY-ERROR: Query for {0}/IN/{1} to {2} - {3}'.format(qname, dns.rdatatype.to_text(rdtype), url, err))
+-                               time.sleep(config['retry_wait'])
+ 
+                            if response:
+                                return response, response.rcode()
+@@ -1948,11 +1983,12 @@ def dox_request(qid, qname, rdtype, cachename, urls, rfc8484, cip):
+ 
+                     except BaseException as err:
+                         logging.error('DNS-QUERY-ERROR: Query for {0}/IN/{1} to {2} - {3}'.format(qname, dns.rdatatype.to_text(rdtype), url, err))
+-                        time.sleep(config['retry_wait'])
+ 
+                     if response:
+                         return response, response.rcode()
+ 
++                time.sleep(config['retry_wait'])
++
+     return None, dns.rcode.SERVFAIL
+ 
+ 
+@@ -1983,6 +2019,7 @@ def ip_family(qname, addrs, cip):
+     else:
+         newaddrs = uniq(list(filter(is_dox4.search, addrs)) + list(filter(is_dox6.search, addrs)) + list(filter(is_dox.search, addrs)) + list(filter(is_ip4.search, addrs)) + list(filter(is_ip6.search, addrs)), 'IPV4')
+ 
++
+     if newaddrs:
+         logging.info('SMART-IP-FORWARDING: {0} {1} -> {2}'.format(iptag, comment, ', '.join(newaddrs)))
+         return newaddrs
+@@ -2324,7 +2361,7 @@ def run_server():
+ 
+     ### TLS: https://stackoverflow.com/questions/46964122/how-to-create-a-tlslite-ng-server-with-tls-1-3-support-only
+ 
+-    global requests_session
++    #global requests_session
+ 
+     dnsport = int(config['port'])
+ 
+@@ -2356,7 +2393,7 @@ def run_server():
+         headers = {'User-Agent': config['useragent']}
+         try:
+             #logging.info('NEXTDNS-FETCH: {0}'.format(url))
+-            r = requests_session.get(url, timeout=5, headers=headers, allow_redirects=False, proxies=None, stream=True)
++            r = requests.get(url, timeout=5, headers=headers, allow_redirects=False, proxies=None)
+             if r:
+                 rcode = r.status_code
+         except BaseException as err:
+@@ -2364,6 +2401,9 @@ def run_server():
+ 
+         if rcode == 200:
+             config['roundrobin'] = False
++            config['ecs_privacy4'] = 32
++            config['ecs_privacy6'] = 128
++
+             body = json.loads(r.text)
+             if body:
+                 for server in range(0, len(body)):
+@@ -2377,16 +2417,21 @@ def run_server():
+                         if config['nextdns_id']:
+                             dnsurl += '/{0}'.format(regex.sub('\s+', '%20', config['nextdns_id']))
+ 
+-
+-                    logging.info('NEXTDNS-SERVER: {0} ({1})'.format(dnsurl, ', '.join(dnsips)))
+                     newnameservers.append(dnsurl)
+ 
+                     getaddrinfo = []
+                     for ip in dnsips:
+-                        if ip.find(':') > 0:
+-                            getaddrinfo.append((10, 1, 6, '', (ip, 443, 0, 0)))
++                        if not check_geo('NEXTDNS-IP', ip, bl_geo, 'BLACKLIST'):
++                            logging.info('NEXTDNS-SERVER-ADDED: {0} = {1} ({2})'.format(dnsurl, ip, geo(ip)))
++                            if ip.find(':') > 0:
++                                getaddrinfo.append((10, 1, 6, '', (ip, 443, 0, 0)))
++                            else:
++                                getaddrinfo.append((2, 1, 6, '', (ip, 443)))
+                         else:
+-                            getaddrinfo.append((2, 1, 6, '', (ip, 443)))
++                            logging.info('NEXTDNS-SERVER-DISCARDED: {0} ({1})'.format(dnsurl, geo(ip)))
++                            getaddrinfo = []
++                            newnameservers.remove(dnsurl)
++                            break
+ 
+                     if getaddrinfo:
+                         #logging.info('NEXTDNS-GETADDR-CACHE: {0}'.format(getaddrinfo))
+@@ -2472,6 +2517,8 @@ if __name__ == '__main__':
+ 
+     # Use EDNS CLIENT SUBNET (ECS) IP as client IP (only when /32 or /128)
+     config['use_ecs_ip'] = True
++    config['ecs_privacy4'] = 24 # ECS Privacy for IPv4 - Only show the /24
++    config['ecs_privacy6'] = 64 # ECS Privacy for IPv6 - Only use the /64
+ 
+     # Random RoundRobin
+     config['roundrobin'] = True
+@@ -2711,9 +2758,9 @@ if __name__ == '__main__':
+         logging.info('ABUSEIPDB: API-Key = {0}'.format(config['abuseipdbkey']))
+ 
+     # Setup requests sessions
+-    requests_session = requests.Session()
+-    requests_session.mount('https://', HTTP20Adapter())
+-    abuseipdb_session = requests.Session()
++    #requests_session = requests.Session()
++    #requests_session.mount('https://', HTTP20Adapter())
++    #abuseipdb_session = requests.Session()
+ 
+     # Geo-IP
+     if config['geodb']:
+@@ -2723,8 +2770,8 @@ if __name__ == '__main__':
+     run_server()
+ 
+     # Terminate
+-    requests_session.close()
+-    abuseipdb_session.close()
++    #requests_session.close()
++    #abuseipdb_session.close()
+     geoip.close()
+  
+     logging.info('SERVER: DeugNietS Stopped')

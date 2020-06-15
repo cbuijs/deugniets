@@ -1,0 +1,72 @@
+diff --git a/Dockerfile b/Dockerfile
+index 58bc227..c4da43f 100644
+--- a/Dockerfile
++++ b/Dockerfile
+@@ -18,7 +18,7 @@ RUN pip3 install --upgrade urllib3==1.25.7
+ RUN pip3 install --upgrade git+https://github.com/sl4vkek/python-abuseipdb@master
+ RUN pip3 install --upgrade git+https://github.com/opendns/dnspython-clientsubnetoption@master
+ RUN pip3 install --upgrade git+https://github.com/rthalley/dnspython@master
+-RUN pip3 install --upgrade git+https://github.com/psf/requests
++RUN pip3 install --upgrade git+https://github.com/psf/requests@master
+ RUN pip3 install --upgrade -r /opt/deugniets/requirements.txt
+ CMD [ "python3", "/opt/deugniets/deugniets.py", "/opt/deugniets/deugniets.conf" ]
+ 
+diff --git a/deugniets.py b/deugniets.py
+index 57dc4ff..2d31730 100644
+--- a/deugniets.py
++++ b/deugniets.py
+@@ -1,7 +1,7 @@
+ #!/usr/bin/env python3
+ '''
+ =======================================================================
+- deugniets.py v2.593-20191126 Copyright 2019 by cbuijs@chrisbuijs.com
++ deugniets.py v2.595-20191126 Copyright 2019 by cbuijs@chrisbuijs.com
+ =======================================================================
+ 
+  Based on: https://github.com/supriyo-biswas/adblock-dns-server
+@@ -376,11 +376,12 @@ def encode_0x20(st):
+ def read_list(filenames, listname, domlst, ip4lst, ip6lst, rxlst, unlst, unip4, unip6):
+     '''Get lists from either file or URL'''
+     for filename in filenames:
++
+         lname = '{0}:{1}'.format(listname, filename)
+         lines = get_lines(filename, listname)
+ 
+         if lines:
+-            #logging.info('PROCESS-LIST ({0}): Starting to process ...'.format(lname))
++            #logging.info('PROCESS-LIST ({0}): Start processing ...'.format(lname))
+             count = 0
+             for line in lines:
+                 count += 1
+@@ -1151,7 +1152,7 @@ def dns_query(name, rdclass, rdtype, qid, cip, unfilter, fttl):
+         logging.warning('ACL-BLACKLIST-HIT [{0}]: Client {1} -> {2}'.format(qid, cip, bl_ip6.get_key(cip)))
+         return (dns.rcode.REFUSED, [], [], [])
+ 
+-    if config['abuseipdbkey'] and is_ip.search(cip):
++    if config['abuseipdbkey'] and is_ip.search(cip) and (not cip in wl_ip4) and (not cip in wl_ip6):
+           score = False
+ 
+           if cip.find(':') > 0 :
+@@ -1164,7 +1165,7 @@ def dns_query(name, rdclass, rdtype, qid, cip, unfilter, fttl):
+           if cip in abuse_ip:
+               score = abuse_ip.get(cip)
+ 
+-          elif (not cip in wl_ip4) and (not cip in wl_ip6):
++          else:
+               ipcheck = ipdb.check(cip)
+               if ipcheck:
+                   logging.info('ABUSEIPDB-CHECK: {0}'.format(cip))
+@@ -1536,7 +1537,12 @@ def dns_query(name, rdclass, rdtype, qid, cip, unfilter, fttl):
+                                             if rdtype in ('A', 'AAAA'):
+                                                 status = is_blacklisted(target, 'DATA', True)
+                                             else:
+-                                                status = is_blacklisted(target, 'DATA-NAME', False)
++                                                if rdtype == 'CNAME':
++                                                    tag = 'CNAME-CLOAK'
++                                                else:
++                                                    tag = 'DATA-NAME'
++
++                                                status = is_blacklisted(target, tag, False)
+ 
+                                             if status is not None:
+                                                 if status is True: # Blacklisted

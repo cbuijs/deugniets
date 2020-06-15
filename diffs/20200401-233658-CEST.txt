@@ -1,0 +1,16 @@
+diff --git a/geo-update.sh b/geo-update.sh
+index ce2ebc5..0ae6722 100755
+--- a/geo-update.sh
++++ b/geo-update.sh
+@@ -6,11 +6,3 @@ cd /opt/deugniets
+ 
+ exit 0
+ 
+-#wget -4 "https://geolite.maxmind.com/download/geoip/database/GeoLite2-City.tar.gz" -O GeoLite2-City.tar.gz
+-wget -4 "https://download.maxmind.com/app/geoip_download_by_token?edition_id=GeoLite2-City&token=v2.local.jURBhaN7zF26t-r1i0aGUoM4loXqLHr2wileNa9uUjNckshoE5hY-pqjBEYMOkcCjpvalxOiYVO499NSymI_ULPnv4T_vS-jB0-J1hxG5vu21TPnrCFhA6V-Jm4kfq1Vkn14qPfc6R_hF2LedeybUe2YXUiYzQtTXjyhzOddF7aQVnyVYsjgO46EGhCCzdz8zGWmY4io&suffix=tar.gz" -O GeoLite2-City.tar.gz
+-rm -f *.mmdb
+-tar --strip-components=1 --wildcards --overwrite -zxvf GeoLite2-City.tar.gz *.mmdb
+-rm -f GeoLite2-City.tar.gz
+-
+-exit 0
+-

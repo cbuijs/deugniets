@@ -1,0 +1,54 @@
+diff --git a/deugniets.py b/deugniets.py
+index a5f034b..46dab52 100644
+--- a/deugniets.py
++++ b/deugniets.py
+@@ -3206,7 +3206,13 @@ def run_server():
+                             tag = 'IPV4'
+                             wl_ip4[ip] = 'NEXTDNS-Server'
+ 
+-                        if config['block_clients'] and not check_badip(cip):
++                        if config['block_clients'] and check_badip(cip):
++                            logging.warning('NEXTDNS-SERVER-DISCARDED: {0} ({1})'.format(dnsurl, geo(ip)))
++                            getaddrinfo = []
++                            newnameservers.remove(dnsurl)
++                            break
++
++                        else:
+                             if tag == 'IPV6':
+                                 getaddrinfo.append((10, 1, 6, '', (ip, 443, 0, 0)))
+                             else:
+@@ -3214,12 +3220,6 @@ def run_server():
+ 
+                             logging.info('NEXTDNS-{0}-SERVER-ADDED: {1} = {2} ({3})'.format(tag, dnsurl, ip, geo(ip)))
+ 
+-                        else:
+-                            logging.warning('NEXTDNS-SERVER-DISCARDED: {0} ({1})'.format(dnsurl, geo(ip)))
+-                            getaddrinfo = []
+-                            newnameservers.remove(dnsurl)
+-                            break
+-
+                     if getaddrinfo:
+                         cachednshost = '{0}/443/GETADDRINFO'.format(dnshost)
+                         cache.add(obj=CachedObject(name=cachednshost, obj=getaddrinfo, ttl=604800)) # 7 Days
+@@ -3281,7 +3281,10 @@ def run_server():
+                             tag = 'IPV4'
+                             wl_ip4[ip] = '{0}-Server'.format(dox)
+ 
+-                        if config['block_clients'] and not check_badip(ip):
++                        if config['block_clients'] and check_badip(ip):
++                            logging.warning('{0}-SERVER-DISCARDED: {1} = BOOTSTRAP:{2} ({3})'.format(dox, hostname, ip, geo(ip)))
++
++                        else:
+                             if tag == 'IPV6':
+                                 getaddrinfo.append((10, 1, 6, '', (ip, aport, 0, 0)))
+                             else:
+@@ -3289,9 +3292,6 @@ def run_server():
+ 
+                             logging.info('{0}-{1}-SERVER-ADDED: {2} = BOOTSTRAP:{3} ({4})'.format(dox, tag, hostname, ip, geo(ip)))
+ 
+-                        else:
+-                            logging.warning('{0}-SERVER-DISCARDED: {1} = BOOTSTRAP:{2} ({3})'.format(dox, hostname, ip, geo(ip)))
+-
+                     if getaddrinfo:
+                         #logging.info('PRE-CACHE: {0}://{1}@{2} = {3}'.format(dox, hostname, aport, ', '.join(ips)))
+                         cachednshost = '{0}/{1}/GETADDRINFO'.format(hostname, aport)

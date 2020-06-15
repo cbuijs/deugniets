@@ -1,0 +1,228 @@
+diff --git a/deugniets.conf b/deugniets.conf
+index 5485c92..283cb70 100644
+--- a/deugniets.conf
++++ b/deugniets.conf
+@@ -52,7 +52,8 @@ smartip = true
+ # Cache Settings
+ blacklist_cache_ttl = 86400
+ blacklist_ttl = 3600
+-rcode_ttl = 120
++rc_ttl = 120
++rc_error_ttl = 30
+ min_ttl = 300
+ max_ttl = 86400
+ spoof_ttl = 3600
+@@ -81,7 +82,7 @@ log_collapse = true
+ log_verbose = true
+ 
+ # Returncodes
+-blacklist_rcode = "NXDOMAIN"
++blacklist_rcode = "REFUSED"
+ tld_rcode = "NXDOMAIN"
+ redirect_ip = ["0.0.0.0", "::"]
+ 
+diff --git a/deugniets.py b/deugniets.py
+index c3af2c2..0289699 100644
+--- a/deugniets.py
++++ b/deugniets.py
+@@ -1,7 +1,7 @@
+ #!/usr/bin/env python3
+ '''
+ =======================================================================
+- deugniets.py v2.372-20191024 Copyright 2019 by cbuijs@chrisbuijs.com
++ deugniets.py v2.38-20191024 Copyright 2019 by cbuijs@chrisbuijs.com
+ =======================================================================
+ 
+  Based on: https://github.com/supriyo-biswas/adblock-dns-server
+@@ -759,17 +759,12 @@ def check_if_blacklisted(testvalue, valuetype, checkip):
+ 
+         wmatch = check_dom(valuetype, testvalue, wl_dom, 'WHITELIST', False, False) # Whitelisted
+         if wmatch:
+-            if config['smartdoms']:
+-                bmatch = check_dom(valuetype, testvalue, bl_dom, 'BLACKLIST', False, True)
+-                if bmatch:
+-                    logging.debug('MATCHING-DEBUG: DOM:{0} - WHITE:{1} - BLACK:{2}'.format(testvalue, wmatch, bmatch))
+-                    match = '{0}{1}'.format(bmatch, wmatch)
+-                    if (testvalue == match or testvalue.endswith('.{0}'.format(match))) and (not check_dom(valuetype, bmatch, wl_dom, 'WHITELIST', False, False)):
+-                        return True
++            #if config['smartdoms']:
++            #    if check_dom(valuetype, testvalue, bl_dom, 'BLACKLIST', False, True) or check_rx(valuetype, '{0}.'.format('.'.join(testvalue.rstrip('.').split('.')[0:-1])), bl_rx, 'BLACKLIST'): # Blacklisted
++            #        return True
+ 
+             return False
+     
+-        #### !!!! TODO: NEED TO DO THE SAME WHITE/BLACK-COMBO MATCHING AS ABOVE FOR THE REST !!!! ####
+ 
+         if check_rx(valuetype, orgtestvalue, wl_rx, 'WHITELIST'):
+             return False
+@@ -1347,15 +1342,22 @@ def dns_query(name, rdclass, rdtype, qid, cip, unfilter, fttl):
+         ### !!! TODO: Optimize return of below NXDOMAIN and REFUSED to skip forwardinf and cache
+         match = check_dom('NAME', qname, forwarder, 'FORWARDER', False, False)
+         if match:
+-            fwdtag = 'SELECTIVE'
+-            addrs = ip_family(cachename, forwarder[match].split(','), cip)
+-            if cip in addrs:
+-                logging.error('FORWARD-LOOP [{0}]: \"{1}\" from {2} (forwarder for {3})'.format(qid, cachename, cip, match))
+-                return (dns.rcode.SERVFAIL, [], [], [])
++            chop = qname[:-len(match)]
++            logging.debug('CHOP: {0} - {1}'.format(qname, chop))
++            if is_blacklisted(chop, 'FORWARDER-CHOP-NAME', False):
++                blacklistname = qname
++                returnstatus = 'BLACKLISTED'
++                rv = (config['blacklist_rcode'], [], [], [])
++            else:
++                fwdtag = 'SELECTIVE'
++                addrs = ip_family(cachename, forwarder[match].split(','), cip)
++                if cip in addrs:
++                    logging.error('FORWARD-LOOP [{0}]: \"{1}\" from {2} (forwarder for {3})'.format(qid, cachename, cip, match))
++                    return (dns.rcode.SERVFAIL, [], [], [])
+ 
+-            forwarder[match] = ','.join(addrs)
++                forwarder[match] = ','.join(addrs)
+ 
+-        if addrs is False:
++        if rv is None and addrs is False:
+             match = 'DEFAULT'
+             if config['safe_nameservers'] and (returnstatus == 'WHITELISTED' or unfilter):
+                 addrs = ip_family(cachename, roundrobin(config['safe_nameservers']), cip)
+@@ -1365,6 +1367,7 @@ def dns_query(name, rdclass, rdtype, qid, cip, unfilter, fttl):
+                 config['nameservers'] = addrs
+ 
+ 
++    if rv is None:
+         result = False
+         response = None
+ 
+@@ -1411,7 +1414,7 @@ def dns_query(name, rdclass, rdtype, qid, cip, unfilter, fttl):
+                 status = None
+ 
+                 if config['filter_response'] and unfilter is False:
+-                    response.answer = normttl(qname, response.answer, qid, False)
++                    response.answer = normttl(qname, response.answer, qid, fttl)
+                     if returnstatus != 'OK': # eg, not WHITELISTED
+                         status = False
+                     else:
+@@ -1475,7 +1478,7 @@ def dns_query(name, rdclass, rdtype, qid, cip, unfilter, fttl):
+ 
+                 else:
+                     status = None
+-                    response.answer = normttl(qname, response.answer, qid, False)
++                    response.answer = normttl(qname, response.answer, qid, fttl)
+ 
+                 if status is not True:
+                     response.answer = collapse(qname, response.answer, qid)
+@@ -1512,34 +1515,45 @@ def dns_query(name, rdclass, rdtype, qid, cip, unfilter, fttl):
+             rcode = dns.rcode.NOERROR
+             rv = (dns.rcode.NOERROR, [], [], [])
+ 
+-        # Cache it
++        # TTL
+         ttl = False
+-        if num > 0:
+-            ttl = rv[1][-1].ttl
+-        elif countrr(rv[2]) > 0 and (not fttl): # Get TTL from SOA
+-            ttl = rv[2][0].ttl
+-            logging.debug('SOA-TTL [{0}]: {1} = {2}'.format(qid, cachename, ttl))
+-
+-        if fttl:
+-            ttl = fttl
+-
+-        if not ttl:
+-            if blacklistname:
+-                ttl = config['blacklist_ttl']
+-            else:
+-                match = check_dom('NAME', name, forcettl, 'TTL', False, False)
+-                if match:
+-                    ttl = forcettl[match]
+-                    logging.info('TTL-OVERRIDE-FORCE [{0}]: Forced to {1} for {2} ({3}) = {4}'.format(qid, ttl, cachename, match, dns.rcode.to_text(rcode)))
++        if rcode == dns.rcode.NOERROR:
++            if num > 0: # Get ttl from answer section
++                ttl = rv[1][-1].ttl
++            elif countrr(rv[2]) > 0: # Get TTL from auth section
++                ttl = rv[2][-1].ttl
++                logging.debug('AUTH-TTL [{0}]: {1} = {2}'.format(qid, cachename, ttl))
++
++            if not ttl:
++                if blacklistname:
++                    ttl = config['blacklist_ttl']
+                 else:
+-                    ttl = config['rcode_ttl']
++                    match = check_dom('NAME', name, forcettl, 'TTL', False, False)
++                    if match:
++                        ttl = forcettl[match]
++                        logging.info('TTL-OVERRIDE-FORCE [{0}]: Forced to {1} for {2} ({3}) = {4}'.format(qid, ttl, cachename, match, dns.rcode.to_text(rcode)))
++                    else:
++                        ttl = config['rc_ttl']
++
++        elif rcode in (dns.rcode.FORMERR, dns.rcode.NOTIMP, dns.rcode.SERVFAIL):
++            ttl = config['rc_error_ttl']
++
++        elif rcode in (dns.rcode.NXDOMAIN, dns.rcode.REFUSED):
++            ttl = config['rc_ttl']
+ 
++        #else:
++        #    ttl = config['min_ttl']
++
++        # Cache it
+         if ttl:
+             if config['log_caching']:
+                 logging.info('CACHED [{0}]: {1} = {2} (TTL:{3}) - {4}'.format(qid, cachename, dns.rcode.to_text(rcode), ttl, returnstatus))
+ 
+-            # Fix repetative queries when using NOERROR as rcode
+-            rcode = rv[0] or config['blacklist_rcode']
++            #rcode = rv[0] or config['blacklist_rcode']
++            rcode = rv[0]
++            if returnstatus == 'BLACKLISTED':
++                rcode = config['blacklist_rcode']
++
+             if returnstatus == 'BLACKLISTED' and rcode in (0, 3):
+                 soa = dns.rrset.from_text(qname, ttl, 'IN', 6, "blocked.{0} {1}.{2}. 1 60 60 60 60".format(qname, qrdtype.lower(), blacklistname.strip('.')))
+                 newrv = False
+@@ -1559,9 +1573,9 @@ def dns_query(name, rdclass, rdtype, qid, cip, unfilter, fttl):
+                     rv = (dns.rcode.NXDOMAIN, [], [soa], [])
+ 
+             elif rcode in (0, 3, 5) and len(rv[1]) < 1 and len(rv[2]) < 1: # NOERROR/NXDOMAIN/REFUSED and no Auth section
+-                if qrdtype == 'AAAA' and rcode != 0 and cache.get('{0}/IN/A'.format(qname)) != None:
+-                    logging.info('AAAA-NXDOMAIN-FIX [{0}]: {1} {2} -> NOERROR/NODATA'.format(qid, cachename, dns.rcode.to_text(rcode)))
+-                    rcode = dns.rcode.NOERROR
++                #if qrdtype == 'AAAA' and rcode == 3: # != 0 and cache.get('{0}/IN/A'.format(qname)) != None:
++                #    logging.info('AAAA-NXDOMAIN-FIX [{0}]: {1} {2} -> NOERROR/NODATA'.format(qid, cachename, dns.rcode.to_text(rcode)))
++                #    rcode = dns.rcode.NOERROR
+ 
+                 soa = dns.rrset.from_text(qname, ttl, 'IN', 6, "{0}.{1} {2}.{1} 1 60 60 60 60".format(dns.rcode.to_text(rcode).lower(), qname, qrdtype.lower()))
+                 rv = (rcode, [], [soa], [])
+@@ -1726,10 +1740,11 @@ def normttl(qname, answer, qid, newttl):
+ 
+ def log_helper(qname, qrdtype, result, tag, qid):
+     log_response(qname, qrdtype, result[1], result[0], '{0}-ANSWER'.format(tag), False, qid)
+-    if result[2]:
+-        log_response(qname, qrdtype, result[2], result[0], '{0}-AUTHORITY'.format(tag), False, qid)
+-    if result[3]:
+-        log_response(qname, qrdtype, result[3], result[0], '{0}-ADDITIONAL'.format(tag), False, qid)
++    if config['log_verbose']:
++        if result[2]:
++            log_response(qname, qrdtype, result[2], result[0], '{0}-AUTHORITY'.format(tag), False, qid)
++        if result[3]:
++            log_response(qname, qrdtype, result[3], result[0], '{0}-ADDITIONAL'.format(tag), False, qid)
+ 
+     return True
+ 
+@@ -1743,7 +1758,7 @@ def log_response(qname, qtype, answer, rcode, tag, spoofedname, qid):
+         if isinstance(rcode, int):
+             rcode = dns.rcode.to_text(rcode)
+ 
+-        if rcode in ('NOERROR', 'NXDOMAIN') and answer:
++        if rcode in ('NOERROR', 'NXDOMAIN', 'REFUSED') and answer:
+             count = 0
+             rrsetcounttotal = len(answer)
+             rrsetcount = 0
+@@ -2046,7 +2061,8 @@ if __name__ == '__main__':
+     # Cache Settings
+     config['blacklist_cache_ttl'] = 60
+     config['blacklist_ttl'] = 3600
+-    config['rcode_ttl'] = 30
++    config['rc_ttl'] = 120
++    config['rc_error_ttl'] = 30
+     config['min_ttl'] = 30
+     config['max_ttl'] = 86400
+     config['spoof_ttl'] = 3600

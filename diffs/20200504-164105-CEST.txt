@@ -1,0 +1,191 @@
+diff --git a/deugniets.py b/deugniets.py
+index f59e0ca..932f162 100644
+--- a/deugniets.py
++++ b/deugniets.py
+@@ -1,7 +1,7 @@
+ #!/usr/bin/env python3
+ '''
+ ===========================================================================
+- deugniets.py v2.95-20200504 Copyright 2019-2020 by cbuijs@chrisbuijs.com
++ deugniets.py v2.964-20200504 Copyright 2019-2020 by cbuijs@chrisbuijs.com
+ ===========================================================================
+ 
+  Based on: https://github.com/supriyo-biswas/adblock-dns-server
+@@ -909,13 +909,6 @@ def is_blacklisted(qname, value, valuetype, checkip):
+     if not checkip:
+         testvalue = regex.split('\s+', str(value))[-1].lower() # Get last value
+ 
+-    cachename = 'BLACKLISTED#{0}#{1}'.format(valuetype, value)
+-    if cachename in check_cache:
+-        result = check_cache.get(cachename, None)
+-        return result, value
+-
+-    #logging.debug('{0}-BLACKLIST-CHECK: {1}'.format(valuetype, testvalue))
+-
+     count = 0
+     while count < config['retry_count'] and testvalue in beingchecked:
+         count += 1
+@@ -924,7 +917,6 @@ def is_blacklisted(qname, value, valuetype, checkip):
+ 
+     if count >= config['retry_count']:
+         logging.error('{0}-BLACKLIST-FAIL: {1} -> {2} - Took to long to check'.format(valuetype, qname, testvalue))
+-        check_cache[cachename] = None
+         return None, ''
+ 
+     beingchecked.add(testvalue)
+@@ -933,11 +925,9 @@ def is_blacklisted(qname, value, valuetype, checkip):
+ 
+     #logging.debug('{0}-CHECK-RESULT: {1} = {2}'.format(valuetype, testvalue, result))
+ 
+-    check_cache[cachename] = result
+-
+     beingchecked.discard(testvalue)
+ 
+-    return result, hitdata
++    return result or None, hitdata or None
+ 
+ 
+ def check_blacklisted(qname, testvalue, valuetype, checkip):
+@@ -1103,9 +1093,12 @@ def check_rx(valuetype, testvalue, rxlst, rxbiglst, tag):
+ 
+     return False
+ 
++def check_dom_fast(trielist, qname):
++    return trielist.shortest_prefix(qname[::-1]).key[::-1] or False
++
+ def check_dom_trie(valuetype, testvalue, trielist, listname, onlyparent, smart):
+     #match = trielist.longest_prefix(testvalue[::-1]).key
+-    match = trielist.shortest_prefix(testvalue[::-1]).key
++    match = trielist.shortest_prefix(testvalue[::-1]).key or False
+     if match:
+         fqdn = match[::-1]
+ 
+@@ -1134,7 +1127,7 @@ def check_dom_smart_trie(valuetype, testvalue, trielist, listname, onlyparent, s
+     while valuetest.count('.') > 1:
+         valuetest = '.'.join(valuetest.split('.')[:-1])
+         #match = trielist.longest_prefix('{0}.'.format(valuetest)[::-1]).key
+-        match = trielist.shortest_prefix('{0}.'.format(valuetest)[::-1]).key
++        match = trielist.shortest_prefix('{0}.'.format(valuetest)[::-1]).key or False
+         if match and match.count('.') > 1:
+             fqdn = match[::-1]
+             if config['log_hits'] and listname:
+@@ -1146,19 +1139,19 @@ def check_dom_smart_trie(valuetype, testvalue, trielist, listname, onlyparent, s
+ 
+ def check_dom(valuetype, testvalue, domlist, listname, onlyparent, smart):
+     '''Match domain against list, works for subdomains too'''
+-    cachename = 'DOM#{0}#{1}#{2}'.format(listname or 'NONE', valuetype, testvalue)
+-    if cachename in check_cache:
+-        return check_cache.get(cachename, False)
++    #cachename = 'DOM#{0}#{1}#{2}'.format(listname or 'NONE', valuetype, testvalue)
++    #if cachename in check_cache:
++    #    return check_cache.get(cachename, False)
+ 
+     if onlyparent is not True and testvalue in domlist:
+         if config['log_hits'] and listname:
+             logging.warning('{0}-DOM-HIT [{1}]: \"{2}\"'.format(valuetype, listname, testvalue))
+-        check_cache[cachename] = testvalue
++        #check_cache[cachename] = testvalue
+         return testvalue
+ 
+     fqdn = check_dom_walk(valuetype, testvalue, domlist, listname, onlyparent)
+     if fqdn:
+-        check_cache[cachename] = fqdn
++        #check_cache[cachename] = fqdn
+         return fqdn
+ 
+     if smart:
+@@ -1166,14 +1159,14 @@ def check_dom(valuetype, testvalue, domlist, listname, onlyparent, smart):
+         if fqdn:
+             return fqdn
+ 
+-    check_cache[cachename] = False
++    #check_cache[cachename] = False
+     return False
+ 
+ 
+ def check_dom_smart(valuetype, testvalue, domlist, listname, onlyparent):
+-    cachename = 'DOM#{0}#{1}#{2}'.format(listname or 'NONE', valuetype, testvalue)
+-    if cachename in check_cache:
+-        return check_cache.get(cachename, False)
++    #cachename = 'DOM#{0}#{1}#{2}'.format(listname or 'NONE', valuetype, testvalue)
++    #if cachename in check_cache:
++    #    return check_cache.get(cachename, False)
+ 
+     valuetest = testvalue.rstrip('.')
+     while valuetest.count('.') > 1:
+@@ -1183,7 +1176,7 @@ def check_dom_smart(valuetype, testvalue, domlist, listname, onlyparent):
+         if fqdn and fqdn.count('.') > 1:
+             if config['log_hits'] and listname:
+                 logging.warning('{0}-SMARTDOM-HIT [{1}]: \"{2}\" -> \"{3}\"'.format(valuetype, listname, testvalue, fqdn))
+-            check_cache[cachename] = fqdn
++            #check_cache[cachename] = fqdn
+             return fqdn
+ 
+     return False
+@@ -1579,7 +1572,7 @@ def dns_query(name, rdclass, rdtype, qid, cip, unfilter, fttl):
+     if unfilter:
+         cachename = '{0}/{1}'.format(cachename, cip)
+         if ip6 is None:
+-            logging.info('{0}-UNFILTER: {1}'.format(cip, cachename))
++            logging.info('INTERNAL-{0}-UNFILTER: {1}'.format(cip, cachename))
+ 
+     # !!! CHECK for smartip-caching, probably already covered by abive IP4/6 tag
+     #if unfilter or config['smartip']:
+@@ -1741,33 +1734,12 @@ def dns_query(name, rdclass, rdtype, qid, cip, unfilter, fttl):
+ 
+     # Prematch forwarders/aliases to speed things up
+     matcha = False
+-    matchf = False
+-    matchw = wl_dom_trie.shortest_prefix(qname[::-1]).key
+-    if matchw:
+-        returnstatus = 'WHITELISTED'
+-        matchw = matchw[::-1]
+-    else:
+-        matchw = False
+-        #matchf = check_dom('NAME', qname, forwarder, 'FORWARDER', False, False)
+-        matchf = check_dom_trie('NAME', qname, forwarder_trie, 'FORWARDER', False, False)
+-        #if matchf and unfilter is False and config['filtering'] and config['smartdoms'] and check_dom_smart('FORWARDER', qname, bl_dom, 'BLACKLIST', True):
+-        if matchf and (unfilter is False) and config['filtering'] and config['smartdoms'] and check_dom_smart_trie('FORWARDER', qname, bl_dom_trie, 'BLACKLIST', True, matchf):
+-            if config['smartdoms']:
+-                #matcha = check_dom_smart('FORWARDER', qname, alias, 'ALIAS', True)
+-                matcha = check_dom_smart_trie('FORWARDER', qname, alias_trie, 'ALIAS', True, matchf)
+-
+-            matchf = False
+-
+-            if matcha is False:
+-                blacklistname = qname
+-                returnstatus = 'SMARTDOM-BLACKLISTED'
+-                rv = (config['blacklist_rcode'], [], [], [])
+-
+-    if rv is None and config['filtering'] and config['filter_request'] and unfilter is False and matchw is False and matchf is False:
+-        if matcha is False:
+-            matcha = check_dom_trie('BLACKLISTED', qname, alias_trie, 'ALIAS', False, config['smartdoms'])
++    matchf = check_dom_trie('NAME', qname, forwarder_trie, 'FORWARDER', False, False)
++    if not matchf:
++        matcha = check_dom_trie('NAME', qname, alias_trie, 'ALIAS', False, False)
+ 
+-        if matcha is False:
++    if rv is None and config['filtering'] and config['filter_request'] and unfilter is False and (not matchf):
++        if not matcha:
+             wmatch, hitdata = is_blacklisted(qname, qname, 'NAME', False) # Due first, faster due to caching of previous results
+             if wmatch is True:
+                 blacklistname = qname
+@@ -1797,9 +1769,6 @@ def dns_query(name, rdclass, rdtype, qid, cip, unfilter, fttl):
+             else:
+                 #match = check_dom('NAME', qname, alias, 'ALIAS', False, False)
+                 match = check_dom_trie('NAME', qname, alias_trie, 'ALIAS', False, False)
+-                #if match is False and config['smartdoms']:
+-                #    #match = check_dom_smart('ALIAS', qname, alias, 'ALIAS', True)
+-                #    match = check_dom_smart_trie('ALIAS', qname, alias_trie, 'ALIAS', True)
+ 
+             if match:
+                 #spoof = alias[match]
+@@ -2432,7 +2401,7 @@ def clear_caches():
+     cache.clear()
+     unfilter_cache.clear()
+     queryhits.clear()
+-    check_cache.clear()
++    #check_cache.clear()
+     geo_cache.clear()
+     gc.collect() # Collect garbage
+     return True

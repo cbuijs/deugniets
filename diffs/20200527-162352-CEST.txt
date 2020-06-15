@@ -1,0 +1,902 @@
+diff --git a/cache.py b/cache.py
+index 10a6088..0f9a2fe 100644
+--- a/cache.py
++++ b/cache.py
+@@ -1,41 +1,15 @@
+-# Based on: https://github.com/dnaeon/py-vconnector/blob/master/src/vconnector/cache.py
+-# v2.01-20200507
+-#
+-# Copyright (c) 2015 Marin Atanasov Nikolov <dnaeon@gmail.com>
+-#
+-# All rights reserved.
+-#
+-# Redistribution and use in source and binary forms, with or without
+-# modification, are permitted provided that the following conditions
+-# are met:
+-# 1. Redistributions of source code must retain the above copyright
+-#    notice, this list of conditions and the following disclaimer
+-#    in this position and unchanged.
+-# 2. Redistributions in binary form must reproduce the above copyright
+-#    notice, this list of conditions and the following disclaimer in the
+-#    documentation and/or other materials provided with the distribution.
+-#
+-# THIS SOFTWARE IS PROVIDED BY THE AUTHOR(S) ``AS IS'' AND ANY EXPRESS OR
+-# IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES
+-# OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED.
+-# IN NO EVENT SHALL THE AUTHOR(S) BE LIABLE FOR ANY DIRECT, INDIRECT,
+-# INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT
+-# NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+-# DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+-# THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+-# (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF
+-# THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
++# cache.py - v2.22-20200527 - cbuijs@chrisbuijs.com
++# Based upon: https://github.com/dnaeon/py-vconnector/blob/master/src/vconnector/cache.py
+ 
+ import logging
+ import threading
+ 
+-#from time import time
+ import time
+ from collections import OrderedDict, namedtuple
+ 
+ __all__ = ['CachedObject', 'CacheInventory']
+ 
+-_CachedObjectInfo = namedtuple('CachedObjectInfo', ['name', 'hits', 'ttl', 'timestamp'])
++_CachedObjectInfo = namedtuple('CachedObjectInfo', ['name', 'hits', 'ttl', 'timestamp', 'expires'])
+ 
+ 
+ class CachedObject(object):
+@@ -47,32 +21,32 @@ class CachedObject(object):
+             name               (str): Human readable name for the cached entry
+             obj               (type): Object to be cached
+             ttl                (int): The TTL in seconds for the cached object
+-
+         """
+-        self.hits = 0
+-        self.name = name
+         self.obj = obj
++        self.name = name
++        self.hits = 0
+         self.ttl = ttl
+         self.timestamp = int(time.time())
++        self.expires = self.timestamp + self.ttl
+ 
+ class CacheInventory(object):
+     """
+     Inventory for cached objects
+ 
+     """
+-    def __init__(self, maxsize=0, housekeeping=0, name='CACHE', cachelog=False):
++    def __init__(self, maxsize=512, housekeeping=30, name='CACHE', minttl=0, maxttl=0, cachelog=False):
+         """
+         Initializes a new cache inventory
+ 
+         Args:
+-            maxsize      (int) : Upperbound limit on the number of items
+-                                that will be stored in the cache inventory
+-            housekeeping (int) : Time in seconds to perform periodic
+-                                cache housekeeping
+-
++            maxsize      (int) : Upperbound limit on the number of items that will be stored in the cache inventory
++            housekeeping (int) : Time in seconds to perform periodic cache housekeeping
+             name         (str) : Name of cache
++            minttl       (int) : Minimum TTL
++            maxttl       (int) : Maximum TTL
+             cachelog     (bool): Logging
+         """
++
+         if maxsize < 0:
+             logging.error('CACHE [{0}]: Cache inventory size is {1}, cannot be negative!'.format(self.name, maxsize))
+             raise
+@@ -81,10 +55,20 @@ class CacheInventory(object):
+             logging.error('CACHE [{0}]: Cache housekeeping period is {1}, cannot be negative!'.format(self.name, housekeeping))
+             raise
+ 
++        if minttl < 0:
++            logging.error('CACHE [{0}]: Cache minttl is {1}, cannot be negative!'.format(self.name, minttl))
++            raise
++
++        if maxttl < 0 or (maxttl > 0 and maxttl < minttl):
++            logging.error('CACHE [{0}]: Cache minttl is {1}, cannot be negative or lower then minttl ({2})!'.format(self.name, maxttl, minttl))
++            raise
++
+         self._cache = OrderedDict()
+         self.maxsize = maxsize
+         self.housekeeping = housekeeping
+         self.name = name
++        self.minttl = minttl
++        self.maxttl = maxttl
+         self.lock = threading.RLock()
+         self._schedule_housekeeper()
+         self.cachelog = cachelog
+@@ -99,9 +83,9 @@ class CacheInventory(object):
+                 return False
+ 
+             item = self._cache[key]
+-            return not self._has_expired(item)
++            return not self._has_expired(item, 'CONTAINS')
+ 
+-    def _has_expired(self, item):
++    def _has_expired(self, item, comment):
+         """
+         Checks if a cached item has expired and removes it if needed
+ 
+@@ -110,11 +94,11 @@ class CacheInventory(object):
+ 
+         Returns:
+             bool: True if the item has expired, False otherwise
+-
+         """
++
+         with self.lock:
+-            if int(time.time()) > item.timestamp + item.ttl:
+-                if self.cachelog: logging.warning('CACHE-EXPIRED [{0}]: Purged \"{1}\" (LifeTime: {2} -> {3} TTL:{4})'.format(self.name, self.info(item.name).name, time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(item.timestamp)), time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(item.timestamp + item.ttl)), item.ttl))
++            if int(time.time()) > item.expires:
++                if self.cachelog: logging.info('CACHE-EXPIRED-{0} [{1}]: Purged \"{2}\" (Start:{3} End:{4} TTL:{5})'.format(comment, self.name, self.info(item.name).name, time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(item.timestamp)), time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(item.expires)), item.ttl))
+                 self._cache.pop(item.name)
+                 return True
+             return False
+@@ -122,8 +106,8 @@ class CacheInventory(object):
+     def _schedule_housekeeper(self):
+         """
+         Schedules the next run of the housekeeper
+-
+         """
++
+         if self.housekeeping > 0:
+             t = threading.Timer(
+                 interval=self.housekeeping,
+@@ -134,46 +118,68 @@ class CacheInventory(object):
+ 
+     def _housekeeper(self):
+         """
+-        Remove expired entries from the cache on regular basis
++        HouseKeeper
++        """
+ 
++        with self.lock:
++            self._purge('SCHEDULER')
++            self._schedule_housekeeper()
++
++    def _purge(self, comment):
+         """
++        Remove expired entries from the cache on regular basis
++        """
++
+         with self.lock:
+             expired = 0
+             items = list(self._cache.values())
+             for item in items:
+-                if self._has_expired(item):
++                if self._has_expired(item, comment):
+                     expired += 1
+ 
+             if expired > 0:
+                 if self.cachelog: logging.info('CACHE-STATS [{0}]: Purged {1} item(s), {2} left'.format(self.name, expired, len(self._cache)))
+ 
+-            self._schedule_housekeeper()
+-
+     def add(self, obj):
+         """
+         Add an item to the cache inventory
+ 
+-        If the upperbound limit has been reached then the last item
+-        is being removed from the inventory.
++        If the upperbound limit has been reached then the last item is being removed from the inventory.
+ 
+         Args:
+             obj (CachedObject): A CachedObject instance to be added
+-
+         """
++
+         if not isinstance(obj, CachedObject):
+             logging.error('CACHE [{0}]: No CachedObject!'.format(self.name))
+             raise
+ 
+         with self.lock:
+             if 0 < self.maxsize == len(self._cache):
+-                popped = self._cache.popitem(last=False)
+-                if self.cachelog: logging.warning('CACHE-FULL [{0}]: Purged \"{1}\"'.format(self.name, self.info(name=popped.name).name))
++                self._purge('CACHE-FULL') # Clear all expired
++
++            while 0 < self.maxsize == len(self._cache):
++                first = list(self._cache.keys())[0] # Get oldest added entry !!! Maybe change to get earliest to expire ones
++                popped = self._cache.pop(first)
++                left = int(popped.expires - time.time())
++                if self.cachelog: logging.warning('CACHE-FULL [{0}]: Purged \"{1}\" (TTL-Left: {2})'.format(self.name, popped.name, left))
++
++            if self.minttl > 0 and obj.ttl < self.minttl:
++                if self.cachelog: logging.info('CACHE-MIN-TTL [{0}]: Increased TTL for \"{1}\" from {2} to {3}'.format(self.name, obj.name, obj.ttl, self.minttl))
++                obj.ttl = self.minttl
++
++            if self.maxttl > 0 and obj.ttl > self.maxttl:
++                if self.cachelog: logging.info('CACHE-MAX-TTL [{0}]: Decreased TTL for \"{1}\" from {2} to {3}'.format(self.name, obj.name, obj.ttl, self.maxttl))
++                obj.ttl = self.maxttl
++
++            obj.expires = obj.timestamp + obj.ttl
+ 
+             self._cache[obj.name] = obj
+             obj = self.info(name=obj.name)
+-            if self.cachelog: logging.info('CACHED [{0} #{4}]: \"{1}\" (TTL:{2} Start: {3})'.format(self.name, obj.name, obj.ttl, time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(obj.timestamp)), len(self._cache)))
+ 
+-    def get(self, name):
++            if self.cachelog: logging.info('CACHED [{0} #{4}]: \"{1}\" (TTL:{2} Start:{3})'.format(self.name, obj.name, obj.ttl, time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(obj.timestamp)), len(self._cache)))
++
++    def get(self, name, default=None):
+         """
+         Retrieve an object from the cache inventory
+ 
+@@ -182,20 +188,19 @@ class CacheInventory(object):
+ 
+         Returns:
+             The cached object if found, None otherwise
+-
+         """
++
+         with self.lock:
+             if name not in self._cache:
+-                return None
++                return default
+ 
+             item = self._cache[name]
+-            if self._has_expired(item):
+-                return None
++            if self._has_expired(item, 'GET'):
++                return default
+ 
+             item.hits += 1
+             obj = self.info(name=item.name)
+-            expires = obj.timestamp + obj.ttl
+-            left = int(expires - int(time.time()))
++            left = int(obj.expires - int(time.time()))
+             if self.cachelog: logging.info('CACHE-HIT [{0}]: \"{1}\" (TTL:{2}) - {3} Hits'.format(self.name, obj.name, left, obj.hits))
+ 
+             return item.obj
+@@ -207,12 +212,12 @@ class CacheInventory(object):
+     def clear(self):
+         """
+         Remove all items from the cache
+-
+         """
++
+         with self.lock:
+             while self._cache:
+                 popped = self._cache.popitem()
+-                if self.cachelog: logging.warning('CACHE-CLEAR [{0}]: Purged \"{1}\"'.format(self.name, popped[0]))
++                if self.cachelog: logging.info('CACHE-CLEAR [{0}]: Purged \"{1}\"'.format(self.name, popped[0]))
+             self._cache.clear()
+         if self.cachelog: logging.debug('CACHE-CLEAR [{0}]: Cache Cleared'.format(self.name))
+ 
+@@ -222,13 +227,13 @@ class CacheInventory(object):
+ 
+         Args:
+             name (str): Name of the cached object
+-
+         """
++
+         with self.lock:
+             if name not in self._cache:
+                 return None
+ 
+             item = self._cache[name]
+-            return _CachedObjectInfo(item.name, item.hits, item.ttl, item.timestamp)
+-
++            return _CachedObjectInfo(item.name, item.hits, item.ttl, item.timestamp, item.expires)
+ 
++# <EOF>
+diff --git a/deugniets.py b/deugniets.py
+index 0c6b79b..cb6963d 100644
+--- a/deugniets.py
++++ b/deugniets.py
+@@ -1,7 +1,7 @@
+ #!/usr/bin/env python3
+ '''
+ ===========================================================================
+- deugniets.py v3.01-20200507 Copyright 2019-2020 by cbuijs@chrisbuijs.com
++ deugniets.py v3.12-20200527 Copyright 2019-2020 by cbuijs@chrisbuijs.com
+ ===========================================================================
+ 
+  Based on: https://github.com/supriyo-biswas/adblock-dns-server
+@@ -14,8 +14,10 @@
+            https://www.maxmind.com
+ 
+  ToDo:
++ - Work on geosteer (Geo based answers/ordering)
++ - Work on roundrobin (rrrr) seems to be random
+  - Finish TRIE rework of domain-based dict's
+-   - Finish UNFILTER one, mix of ip/dom
++   - Finish UNFILTER (+ cache) one, mix of ip/dom
+    - Do geo_cache (remove cachetools)
+  - Rewrite/Re-Add stats.command
+    Add functions to cache to get all entries without increasing hit count
+@@ -26,9 +28,12 @@
+    - Add multiple addresses/ports liste_on feature
+  - Ability to disable resolution of aliases/spoofs
+  - Alias based on regex
++   - See instigator
+  - Listen on DoT (853) and DoH (443) - SSL/Certificate config
++   - Or use: https://github.com/folbricht/routedns
+  - Pre-calculate ecs-prefix privacy instead everytime
+    - Meh.
++ - Make pruning sorted, see big_trie, apply to other *_trie as well
+ 
+ ===========================================================================
+ '''
+@@ -108,14 +113,17 @@ from cachetools import LRUCache
+ from cache import CachedObject, CacheInventory
+ 
+ # Initialize caches
+-cache = CacheInventory(maxsize=65535, housekeeping=60, name='DNS-Cache', cachelog=True)
+-unfilter_cache = CacheInventory(maxsize=512, housekeeping=60, name='UnFilter', cachelog=False)
++cache = CacheInventory(maxsize=8192, housekeeping=60, name='DNS-Cache', minttl=0, maxttl=0, cachelog=True)
++unfilter_cache = CacheInventory(maxsize=512, housekeeping=60, name='UnFilter', minttl=0, maxttl=0, cachelog=False)
+ 
+ geo_cache = LRUCache(maxsize=8192)
+ 
+ check_cache_trie = pygtrie.StringTrie(separator='.')
+ check_cache_size = 8192
+ 
++#big_trie = pygtrie.StringTrie(separator='.')
++#big_trie_size = 512
++
+ # Lists
+ wl_dom = dict()
+ bl_dom = dict()
+@@ -153,7 +161,8 @@ private6 = pytricia.PyTricia(128, socket.AF_INET6)
+ dummy = '#!#!DUMMY!#!#'
+ 
+ # Domain Regex
+-is_dom = regex.compile('(?=^.{1,253}[a-z][\.]*$)(^((?!-)[a-z0-9_-]{0,62}[a-z0-9]\.)*(xn--[a-z0-9-]{1,59}|[a-z]{2,63})[\.]*$)', regex.I) # Includes underscore
++#is_dom = regex.compile('(?=^.{1,253}[a-z][\.]*$)(^((?!-)[a-z0-9_-]{0,62}[a-z0-9]\.)*(xn--[a-z0-9-]{1,59}|[a-z]{2,63})[\.]*$)', regex.I) # Includes underscore
++is_dom = regex.compile('(?=^.{1,253}[a-z][\.]*$)(^((?!-)[a-z0-9\._-]{0,62}[a-z0-9]\.)*(xn--[a-z0-9-]{1,59}|[a-z]{2,63})[\.]*$)', regex.I) # Includes underscore
+ 
+ # Domain words
+ is_domword = regex.compile('^\*[a-z0-9\-]+$', regex.I)
+@@ -220,7 +229,7 @@ def _getaddrinfo(host, port=53, family=0, type=0, proto=0, flags=0):
+ 
+     beingchecked.add(cachename)
+ 
+-    result = cache.get(cachename) or None
++    result = cache.get(cachename, None)
+ 
+     if result is None:
+         try:
+@@ -436,7 +445,7 @@ def make_trie(dlist, listname, keepval):
+         if keepval:
+             new_trie[key[::-1]] = dlist.get(key, None)
+         else:
+-            new_trie[key[::-1]] = key
++            new_trie[key[::-1]] = None
+ 
+     logging.info('MAKE-TRIE: {0} = {1} Entries'.format(listname, len(new_trie)))
+ 
+@@ -932,7 +941,7 @@ def is_blacklisted(qname, value, valuetype, checkip):
+     #if value in check_cache:
+     if rvalue in check_cache_trie:
+         fromcache = True
+-        #result, hitdata = check_cache.get(value)
++        #result, hitdata = check_cache.get(value, None)
+         result, blocktype, hitdata = check_cache_trie.get(rvalue, (None, None))
+ 
+     elif not checkip:
+@@ -1167,10 +1176,11 @@ def check_rx(valuetype, testvalue, rxlst, rxbiglst, tag):
+ 
+         else:
+             for rx in rxlst:
+-                match = rxlst[rx].search(testvalue) or rxlst[rx].search(testvalue.rstrip('.'))
++                rgx = rxlst[rx]
++                match = rgx.search(testvalue) or rgx.search(testvalue.rstrip('.'))
+                 if match:
+                     if config['log_hits']:
+-                        logging.warning('{0}-{1}-RX-HIT: \"{2}\" matches \"{3}\"'.format(valuetype, tag, testvalue, rx))
++                        logging.warning('{0}-{1}-RX-HIT: \"{2}\" matches \"{3}\" (Match: \"{4}\")'.format(valuetype, tag, testvalue, rx, match.group()))
+                     return rx
+ 
+     return False
+@@ -1521,28 +1531,65 @@ def rev_check(testvalue, domlist, tag):
+     return False
+ 
+ 
+-def rrrr(answer):
+-    return answer # !!!! This needs work
++def rrrr(response):
++    answer = response[1]
++    if answer:
++        new_answer = []
++        for rrset in answer:
++            newrrdata = rrset
++            rdtypet = dns.rdatatype.to_text(rrset.rdtype)
++            rrname = str(rrset.name)
++            ttl = int(rrset.ttl)
+ 
+-    if config['randomroundrobin']:
+-        r = random.randint(1, len(lst))
++            if rrset.rdtype in (1, 28) and len(rrset) > 1:
++                #logging.debug('ROUNDROBIN-BEFORE: {0}/{1} = {2}'.format(rrname, rdtypet,', '.join(list(map(str, rrset)))))
++                newrrdata = list()
++                if config['randomroundrobin']:
++                    r = random.randint(1, len(rrset))
++                else:
++                    r = 1
++
++                for rrd in list(map(str, rrset[r:] + rrset[:r])):
++                    newrrdata.append(rrd)
++
++                #logging.debug('ROUNDROBIN-AFTER: {0}/{1} = {2}'.format(rrname, rdtypet, ', '.join(newrrdata)))
++
++            new_answer.append(dns.rrset.from_text_list(rrname, ttl, 'IN', rdtypet, newrrdata))
+     else:
+-        r = 1
++        return response
+ 
+-    new_answer = []
+-    for rrset in answer:
+-        rrname = str(rrset.name)
+-        ttl = int(rrset.ttl)
+-        rrdata = list(map(str, rrset))
++    return (response[0], new_answer, response[2], response[3], response[4])
+ 
+-        if rrset.rdtype in (1, 28) and len(rrdata) > 1:
+-            #logging.info('ROUNDROBIN: {0} before: {1}'.format(rrname, ', '.join(rrdata)))
+-            rrdata[:] = rrdata[r:] + rrdata[:r]
+-            #logging.info('ROUNDROBIN: {0} after: {1}'.format(rrname, ', '.join(rrdata)))
+ 
+-        new_answer.append(dns.rrset.from_text_list(rrname, ttl, 'IN', dns.rdatatype.to_text(rrset.rdtype), rrdata))
++def geosteer(qname, answer):
++    if config['geo_steer'] and answer:
++        new_answer = []
++        for rrset in answer:
++            rrname = str(rrset.name)
++            rdtypet = dns.rdatatype.to_text(rrset.rdtype)
++            ttl = int(rrset.ttl)
++            rrdatalist = list(map(str, rrset))
++            newrrdata = list()
++            geodata = set()
++            if rrset.rdtype in (1, 28) and len(rrdatalist) > 1:
++                for ip in rrdatalist:
++                    geoname = check_geo(qname, 'IP', ip, config['geo_steer'], 'GEOSTEER')
++                    if geoname:
++                        #logging.info('GEO-STEER: {0}/{1} = {2} (~ {3})'.format(rrname, rdtypet, ip, geoname))
++                        newrrdata.append(ip)
++                        geodata.add(geoname)
++                    #else:
++                    #    logging.info('GEO-STEER: {0}/{1} = {2} (~ {3} = NO-PREF)'.format(rrname, rrset.rdtypet, ip, geo(ip)))
++                
++            if newrrdata and geodata and len(newrrdata) < len(rrdatalist):
++                logging.info('GEO-STEER: {0}/{1} from {2} to {3} answers (~ {4})'.format(rrname, rdtypet, len(rrdatalist), len(newrrdata), ', '.join(geodata)))
++                rrdatalist = newrrdata
+ 
+-    return new_answer
++            new_answer.append(dns.rrset.from_text_list(rrname, ttl, 'IN', rdtypet, rrdatalist))
++
++        return new_answer
++
++    return answer
+ 
+ 
+ def collapse(name, rdtype, answer, qid):
+@@ -1653,19 +1700,19 @@ def dns_query(name, rdclass, rdtype, qid, cip, unfilter, fttl):
+         if cip not in private4 and cip not in private6:
+             cachename = '{0}/PUBLIC'.format(cachename)
+ 
+-        if config['use_ecs_ip']:
+-            tag = 'IP4'
+-            if ip6:
+-                tag = 'IP6'
++        #if config['use_ecs_ip']:
++        tag = 'IP4'
++        if ip6:
++            tag = 'IP6'
+ 
+-            cachename = '{0}/{1}'.format(cachename, tag)
++        cachename = '{0}/{1}'.format(cachename, tag)
+ 
+     else:
+         unfilter = True
+ 
+     if unfilter:
+-        #cachename = '{0}/{1}'.format(cachename, cip)
+-        cachename = '{0}/UNFILTER'.format(cachename)
++        cachename = '{0}/{1}'.format(cachename, cip)
++        #cachename = '{0}/UNFILTER'.format(cachename)
+         if ip6 is None:
+             logging.info('INTERNAL-{0}-UNFILTER: {1}'.format(cip, cachename))
+ 
+@@ -1725,6 +1772,16 @@ def dns_query(name, rdclass, rdtype, qid, cip, unfilter, fttl):
+             elif command == 'FLUSH':
+                 clear_caches()
+ 
++            elif command == 'STATS':
++                hitlist = dict()
++                for entry in cache.entries():
++                    hitlist[entry.name] = entry.hits
++
++                count = 0
++                for entry in sorted(hitlist, key=hitlist.get, reverse=True): #[0:50]
++                    count += 1
++                    logging.info('CACHE-STATS: #{0} {1} = {2} Hits'.format(count, entry, hitlist.get(entry, 0)))
++
+             else:
+                 logging.error('COMMAND-UNKNOWN: {0}'.format(command))
+                 soa = dns.rrset.from_text(qname, 0, 'IN', 6, 'unknown.command. {0}. {1} 60 60 60 60'.format(command.lower(), int(time.time())))
+@@ -1756,43 +1813,41 @@ def dns_query(name, rdclass, rdtype, qid, cip, unfilter, fttl):
+             parentcachename = '.'.join(lcachename.split('.')[parentcount:])
+             gcachename = '{0}/{1}'.format(parentcachename, rcachename)
+ 
+-        result = cache.get(gcachename)
++        result = cache.get(gcachename, None)
+         if result is not None:
+             obj = cache.info(name=gcachename)
+-            expires = obj.timestamp + obj.ttl
+-            left = int(expires - time.time())
++            left = int(obj.expires - time.time())
+             #logging.info('CACHE-HITS: {0} = {1} hits'.format(cachename, obj.hits))
+-            if left > 0:
+-                if gcachename == cachename:
+-                    result = update_ttls(qid, qname, result, left)
+-                    if ['log_caching']:
+-                        log_helper(qname, qrdtype, result, 'RESPONSE-FROM-CACHE', qid, False)
+-                    return result
+-
+-                elif config['parent_cache_hit']:
+-                    if result[0] != 0: # Parent cache not NOERROR
+-                        newresult = update_ttls(qid, qname, (result[0], [], result[2], [], result[4]), left)
+-                        if config['log_caching'] and config['log_hits']:
+-                            logging.info('PARENT-CACHE-HIT [{0}]: {1} -> {2} -> {3} (TTL-LEFT:{4}) - {5}'.format(qid, cachename, gcachename, dns.rcode.to_text(newresult[0]), left, newresult[4]))
+-                            log_helper(qname, qrdtype, newresult, 'RESPONSE-FROM-PARENT-CACHE', qid, False)
+-                        return newresult
+-
+-                    elif config['redirect_ip'] and len(result[1]) > 0: # parent cache redirect ip
+-                        for rrset in result[1]:
+-                            if rrset.rdtype in (1, 28): # Only A and AAAA
+-                                for rr in rrset:   
+-                                    if hasattr(rr, 'address'):
+-                                        target = str(rr.address)
+-                                        if target in config['redirect_ip']:
+-                                            result = update_ttls(qid, qname, result, left)
+-                                            if config['log_hits'] and config['log_caching']:
+-                                                logging.info('PARENT-CACHE-HIT [{0}]: {1} -> {2} -> {3} (TTL-LEFT:{4}) - {5}'.format(qid, cachename, gcachename, target, left, result[4]))
+-                                                log_helper(qname, qrdtype, result, 'RESPONSE-FROM-PARENT-CACHE', qid, False)
+-                                            return result
+-                else: # No parent check
+-                    break
+-
+-            else: # Found but expired
++            if gcachename == cachename:
++                result = update_ttls(qid, qname, result, left)
++                if ['log_caching']:
++                    log_helper(qname, qrdtype, result, 'RESPONSE-FROM-CACHE', qid, False)
++                #return rrrr(result)
++                return result
++
++            elif config['parent_cache_hit']:
++                if result[0] != 0: # Parent cache not NOERROR
++                    newresult = update_ttls(qid, qname, (result[0], [], result[2], [], result[4]), left)
++                    if config['log_caching'] and config['log_hits']:
++                        logging.info('PARENT-CACHE-HIT [{0}]: {1} -> {2} -> {3} (TTL-LEFT:{4}) - {5}'.format(qid, cachename, gcachename, dns.rcode.to_text(newresult[0]), left, newresult[4]))
++                        log_helper(qname, qrdtype, newresult, 'RESPONSE-FROM-PARENT-CACHE', qid, False)
++                    #return rrrr(newresult)
++                    return newresult
++
++                elif config['redirect_ip'] and len(result[1]) > 0: # parent cache redirect ip
++                    for rrset in result[1]:
++                        if rrset.rdtype in (1, 28): # Only A and AAAA
++                            for rr in rrset:   
++                                if hasattr(rr, 'address'):
++                                    target = str(rr.address)
++                                    if target in config['redirect_ip']:
++                                        result = update_ttls(qid, qname, result, left)
++                                        if config['log_hits'] and config['log_caching']:
++                                            logging.info('PARENT-CACHE-HIT [{0}]: {1} -> {2} -> {3} (TTL-LEFT:{4}) - {5}'.format(qid, cachename, gcachename, target, left, result[4]))
++                                            log_helper(qname, qrdtype, result, 'RESPONSE-FROM-PARENT-CACHE', qid, False)
++                                        #return rrrr(result)
++                                        return result
++            else: # No parent check
+                 break
+ 
+ 
+@@ -2114,10 +2169,27 @@ def dns_query(name, rdclass, rdtype, qid, cip, unfilter, fttl):
+ 
+         #if config['fix_cname'] and rcode == dns.rcode.NOERROR and num > 0 and rv[1][0].rdtype == 5 and (rv[1][-1].rdtype not in (1, 28)): #CNAME and no Address A/AAAA
+         if config['fix_cname'] and rcode == dns.rcode.NOERROR and num > 0 and rv[1][0].rdtype == 5 and rdtype != 5 and rv[1][-1].rdtype != rdtype: #CNAME not ending in requested type
+-            logging.warning('FIX-CNAME-NO-{0} [{1}]: {2} -> NXDOMAIN'.format(qrdtype, qid, cachename))
+             returnstatus = '{0}-NOADDRESS'.format(returnstatus)
+-            rv = (dns.rcode.NXDOMAIN, [], rv[2], [])
+-                         
++
++            newrdtype = False
++            ip = False
++
++            if config['fix_cname_redirect'] and config['redirect_ip']:
++                ttl = rv[1][0].ttl
++                if rdtype in (1, 5): # A or CNAME
++                    newrdtype = 1
++                    ip = list(filter(is_ip4.search, config['redirect_ip']))
++
++                elif rdtype in (5, 28): # CNAME or AAAA
++                    newrdtype = 28
++                    ip = list(filter(is_ip6.search, config['redirect_ip']))
++
++            if newrdtype and ip:
++                logging.warning('FIX-CNAME-NO-{0} [{1}]: {2} -> {3}'.format(qrdtype, qid, cachename, '.'.join(ip)))
++                rv = (dns.rcode.NOERROR, [dns.rrset.from_text_list(qname, ttl, 'IN', newrdtype, ip)], rv[2], [])
++            else:
++                logging.warning('FIX-CNAME-NO-{0} [{1}]: {2} -> NXDOMAIN'.format(qrdtype, qid, cachename))
++                rv = (dns.rcode.NXDOMAIN, [], rv[2], [])
+ 
+         num = countrr(rv[1])
+         rcode = rv[0]
+@@ -2183,8 +2255,12 @@ def dns_query(name, rdclass, rdtype, qid, cip, unfilter, fttl):
+             if rcode == dns.rcode.NOERROR and returnstatus.find('BLACKLISTED') < 0:
+                 ttl = norm_ttl(qid, qname, ttl, config['min_ttl'], config['max_ttl'])
+ 
++            # Equalize TTLs
+             rv = update_ttls(qid, qname, rv, ttl)
+ 
++            # Geo-Steer
++            rv = (rv[0], geosteer(qname, rv[1]), rv[2], rv[3], returnstatus)
++
+             # Cache it
+             if config['log_caching']:
+                 log_helper(qname, rdtype, (rv[0], rv[1], rv[2], rv[3], returnstatus), 'RESPONSE-TO-CACHE', qid, False)
+@@ -2255,10 +2331,11 @@ def dox_request(qid, qname, rdtype, cachename, urls, rfc8484, cip):
+     # https://stackoverflow.com/questions/17681230/how-make-dns-queries-in-dns-python-as-dig-with-additional-records-section
+     if rdtype == dns.rdatatype.ANY:
+         message.flags |= dns.flags.AD
+-        #message.find_rrset(message.additional, dns.name.root, 65535, dns.rdatatype.OPT, create=True, force_unique=True)
+-        message.find_rrset(message.additional, dns.name.root, 4096, dns.rdatatype.OPT, create=True, force_unique=True)
++        message.find_rrset(message.additional, dns.name.root, 65535, dns.rdatatype.OPT, create=True, force_unique=True)
++        #message.find_rrset(message.additional, dns.name.root, 4096, dns.rdatatype.OPT, create=True, force_unique=True)
+ 
+-    if config['use_ecs_ip'] and icip:
++    #if config['use_ecs_ip'] and icip:
++    if icip and (config['override_ecs_ip4'] or config['override_ecs_ip6']):
+         ccip = cip
+         bits = 0
+         if ip6 or config['force6']:
+@@ -2333,7 +2410,8 @@ def dox_request(qid, qname, rdtype, cachename, urls, rfc8484, cip):
+                     response = False
+                     try:
+                         # !!!! Do something with bootstrap_address=str (ips)
+-                        response = dns.query.https(message, url, post=config['doh_post'], port=int(port), timeout=5, af=af, session=requests_session)
++                        #response = dns.query.https(message, url, post=config['doh_post'], port=int(port), timeout=5, af=af, session=requests_session)
++                        response = dns.query.https(message, url, post=config['doh_post'], port=int(port), timeout=5, session=requests_session)
+ 
+                     except BaseException as err:
+                         logging.error('DOH-ERROR: Query for {0}/IN/{1} to {2} - {3}'.format(qname, dns.rdatatype.to_text(rdtype), url, err))
+@@ -2417,7 +2495,8 @@ def dox_request(qid, qname, rdtype, cachename, urls, rfc8484, cip):
+ 
+                            response = False
+                            try:
+-                               response = dns.query.tls(message, addr, timeout=5, port=int(port), server_hostname=servername, af=af)
++                               #response = dns.query.tls(message, addr, timeout=5, port=int(port), server_hostname=servername, af=af)
++                               response = dns.query.tls(message, addr, timeout=5, port=int(port), server_hostname=servername)
+ 
+                            except BaseException as err:
+                                logging.error('DOT-QUERY-ERROR: Query for {0}/IN/{1} to {2} - {3}'.format(qname, dns.rdatatype.to_text(rdtype), url, err))
+@@ -2439,7 +2518,8 @@ def dox_request(qid, qname, rdtype, cachename, urls, rfc8484, cip):
+ 
+                             response = False
+                             try:
+-                                response = dns.query.udp(message, addr, timeout=5, port=int(port), af=af)
++                                #response = dns.query.udp(message, addr, timeout=5, port=int(port), af=af)
++                                response = dns.query.udp(message, addr, timeout=5, port=int(port))
+ 
+                             except BaseException as err:
+                                 logging.error('DNS-QUERY-ERROR: Query for {0}/IN/{1} to {2} - {3}'.format(qname, dns.rdatatype.to_text(rdtype), url, err))
+@@ -2568,6 +2648,7 @@ def geo(client_ip):
+                 try:
+                     gip = geoip.city(cip)
+                     if gip:
++                        #logging.info('GEOIP-DEBUG: {0} = ASN{1}'.format(cip, gip.traits.autonomous_system_number))
+                         response = regex.sub('[^a-zA-Z0-9\/\?]+', '', '{0}/{1}/{2}/{3}'.format(gip.city.name or '?', gip.subdivisions.most_specific.name or '?', gip.country.name or '?', gip.continent.name or '?')).upper()
+                 except:
+                     pass
+@@ -2592,6 +2673,7 @@ def handle_query(raw_data, client_ip):
+         return
+ 
+     # Need IPy.IP for octal conversion to real IP
++    #if hasattr(query, 'options'):
+     if config['use_ecs_ip'] and hasattr(query, 'options'):
+         for opt in query.options:
+             if hasattr(opt, 'ip') and hasattr(opt, 'mask'):
+@@ -2617,6 +2699,7 @@ def handle_query(raw_data, client_ip):
+     queryname = '{0}/{1}/{2}'.format(name, rdclasst, rdtypet)
+     bname = '{0}/{1}/*'.format(name, rdclasst)
+ 
++    fromtrie = False
+ 
+     if check_badip(cip):
+         logging.warning('DROP-CLIENT: {0} requesting {1}/{2}/{3} from {4}'.format(compress_ip(cip), name, rdtypet, rdclasst, geo(cip)))
+@@ -2656,6 +2739,10 @@ def handle_query(raw_data, client_ip):
+     if servfail:
+         result = (dns.rcode.SERVFAIL, [], [], [])
+ 
++    if config['rrtype_allow'] and (rdtypet not in config['rrtype_allow']):
++        logging.warning('BLOCK-RRTYPE-HIT [{0}]: {1} - \"{2}\" Not Allowed (Not: {3})'.format(query.id, queryname, rdtypet, ', '.join(config['rrtype_allow'])))
++        result = (dns.rcode.NOERROR, [], [], [])
++   
+     else:
+         #logging.debug('REQUEST-FLAGS-FROM-CLIENT [{0}]: {1}'.format(query.id, dns.flags.to_text(query.flags)))
+ 
+@@ -2681,13 +2768,95 @@ def handle_query(raw_data, client_ip):
+ 
+ 
+         # Make query
+-        result = dns_query(name, rdclass, rdtype, query.id, cip, unfilter, False)
+-
++        #result = False
++        #triekey = '{0}.{1}'.format(name[::-1], rdtypet)
++        #if triekey in big_trie:
++        #    rcode, expire, rrdata, status = big_trie.get(triekey)
++        #    if expire > time.time():
++        #        fromtrie = True
++        #        ttl = int(expire - time.time())
++        #        logging.info('BIG-TRIE: Retrieved {0}/{1} -> {2} (TTL: {3})'.format(name, rdtypet, ', '.join(rrdata) or str(dns.rcode.to_text(rcode)), ttl))
++        #        soa = []
++        #        if rcode in (dns.rcode.NXDOMAIN, dns.rcode.REFUSED, dns.rcode.NOTIMP, dns.rcode.NOTAUTH, dns.rcode.NOTZONE):
++        #            striekey = '{0}.SOA'.format(name[::-1])
++        #            if striekey in big_trie:
++        #                srcode, sexpire, srrdata, sstatus = big_trie.get(striekey)
++        #                sttl = int(expire - time.time())
++        #                logging.info('BIG-TRIE: Retrieved {0}/{1} -> {2} (TTL: {3})'.format(name, 'SOA', ', '.join(srrdata) or str(dns.rcode.to_text(srcode)), sttl))
++        #                soa = [dns.rrset.from_text_list(name, sttl, 'IN', 'SOA', srrdata)]
++        #            else:
++        #                serial = int(time.time())
++        #                logging.info('BIG-TRIE: Generated {0}/SOA -> {1}. {2}. {3}. 60 60 60 60 (TTL: {4})'.format(name, dns.rcode.to_text(rcode), rdtypet, serial, ttl))
++        #                soa = [dns.rrset.from_text(name, ttl, 'IN', 'SOA', '{0}. {1}. {2} 60 60 60 60'.format(dns.rcode.to_text(rcode), rdtypet, serial))]
++
++        #        result = (rcode, [dns.rrset.from_text_list(name, ttl, 'IN', rdtypet, rrdata)], soa, [], status)
++
++        #    else:
++        #        rcode, expire, rrdata, status = big_trie.pop(triekey)
++        #        logging.info('BIG-TRIE: Pruned {0}/{1} -> {2} (Expired)'.format(name, rdtypet, ', '.join(rrdata) or str(dns.rcode.to_text(rcode))))
++
++        #if result is False:
+ 
++        result = dns_query(name, rdclass, rdtype, query.id, cip, unfilter, False)
+ 
+     status = 'NORMAL'
+     if len(result) > 4:
+         status = result[4]
++    else:
++        result = (result[0], result[1], result[2], result[3], status)
++
++    #if fromtrie is False:
++    #    if result[0] != 0: # or (result[0] == 0 and len(result[1]) < 1):
++    #        triekey = '{0}.{1}'.format(name[::-1], rdtypet)
++    #        logging.info('BIG-TRIE: Stored {0}/{1} -> {2} (TTL: {3})'.format(name, rdtypet, str(dns.rcode.to_text(result[0])), config['rc_ttl']))
++    #        # !!!! TODO: Take SOA TTL if availble !!!!
++    #        big_trie[triekey] = result[0], int(time.time() + config['rc_ttl']), [], status
++    #        # !!!! Reinstate SOA, quickfix for now
++    #        soa = [dns.rrset.from_text(name, config['rc_ttl'], 'IN', 'SOA', '{0}. {1}. {2} 60 60 60 60'.format(dns.rcode.to_text(result[0]), rdtypet, int(time.time())))]
++    #        result = (result[0], result[1], soa, [], result[4])
++
++    #    for rrset in result[1] + result[2] + result[3]:
++    #        ttl = rrset.ttl
++    #        expire = int(time.time() + ttl)
++    #        rrname = str(rrset.name)
++    #        rrdtype = dns.rdatatype.to_text(rrset.rdtype)
++    #        rrdata = list()
++    #        for rr in rrset:
++    #            if hasattr(rr, 'target'):
++    #                target = str(rr.target)
++    #            elif hasattr(rr, 'address'):
++    #                target = str(rr.address)
++    #            else:
++    #                target = str(rr)
++ 
++    #            rrdata.append(target)
++
++    #        triekey = '{0}.{1}'.format(rrname[::-1], rrdtype)
++    #        logging.info('BIG-TRIE: Stored {0}/{1} -> {2} (TTL: {3})'.format(rrname, rrdtype, ', '.join(rrdata) or str(dns.rcode.to_text(result[0])), ttl))
++    #        big_trie[triekey] = result[0], expire, rrdata, status
++
++
++    #    if len(big_trie) > big_trie_size:
++    #        for key in big_trie.copy():
++    #            rcode, expire, rrdata, status = big_trie.get(key)
++    #            if expire < time.time():
++    #                btname = '.'.join(key.split('.')[:-1])[::-1]
++    #                bttype = key.split('.')[-1]
++    #                rcode, expire, rrdata, status = big_trie.pop(key)
++    #                logging.info('BIG-TRIE: Pruned {0}/{1} -> {2} (Expired)'.format(btname, bttype, ', '.join(rrdata) or str(dns.rcode.to_text(rcode))))
++                
++
++    #    while len(big_trie) > big_trie_size:
++    #        first = sorted(big_trie.items(), key=lambda x: x[1][1])[0][0]
++    #        if first in big_trie:
++    #            btname = '.'.join(first.split('.')[:-1])[::-1]
++    #            bttype = first.split('.')[-1]
++    #            try:
++    #                rcode, expire, rrdata, status = big_trie.pop(first)
++    #                ttl = int(expire - time.time())
++    #                logging.info('BIG-TRIE: Pruned {0}/{1} -> {2} ({3}) - CACHE-FULL'.format(btname, bttype, ', '.join(rrdata) or str(dns.rcode.to_text(rcode)), ttl))
++    #            except:
++    #                pass
+ 
+     if config['min_resp']:
+         if result[0] == 0:
+@@ -3117,6 +3286,10 @@ if __name__ == '__main__':
+     config['use_regex'] = True
+     config['use_quick_regex'] = True
+ 
++    # RRTypes allowed
++    config['rrtype_allow'] = False
++    #config['rrtype_allow'] = ['A', 'AAAA', 'MX']
++
+     # Smart domains (walk domains to see if blacklisted domains are prepended)
+     config['smartdoms'] = False
+ 
+@@ -3128,6 +3301,7 @@ if __name__ == '__main__':
+ 
+     # Fix CNAME with no address-records
+     config['fix_cname'] = True
++    config['fix_cname_redirect'] = False
+ 
+     # Useragent
+     config['useragent'] = 'DEUGNIETS/2.x'
+@@ -3138,6 +3312,9 @@ if __name__ == '__main__':
+     config['nextdns_config'] = ''
+     config['nextdns_id'] = 'DEUGNIETS'
+ 
++    # GEO-Steer
++    config['geo_steer'] = False
++
+     # Get config
+     if len(sys.argv) < 2:
+         config = get_config(config, 'deugniets.conf')
+@@ -3150,6 +3327,9 @@ if __name__ == '__main__':
+     if isinstance(config['tld_rcode'], str):
+         config['tld_rcode'] = dns.rcode.from_text(config['tld_rcode'])
+ 
++    if config['rrtype_allow']:
++        config['rrtype_allow'] = list(map(str.upper, config['rrtype_allow']))
++
+     # Create combined regex for speed
+     wl_big_rx = regex.compile(dummy)
+     bl_big_rx = regex.compile(dummy)
+@@ -3158,10 +3338,12 @@ if __name__ == '__main__':
+     # Read lists
+     if not config['filtering']:
+         config['use_dnsl'] = False
++        config['use_regex'] = False
+         config['unfilter'] = False
+         config['check_tld'] = False
+         config['filter_request'] = False
+         config['filter_response'] = False
++        config['rrtype_allow'] = False
+     else:
+         # Get TLDS
+         if config['check_tld']:
+@@ -3250,15 +3432,21 @@ if __name__ == '__main__':
+             bl_ip6 = unip(bl_ip6, wl_ip6, True, 'BLACKLIST-WHITELIST', False)
+ 
+ 
+-        if len(wl_dom) + len(wl_ip4) + len(wl_ip6) + len(wl_rx) + len(bl_dom) + len(bl_ip4) + len(bl_ip6) + len(bl_rx) == 0:
+-            logging.info('FILTERING: Request/Response filtering DISABLED due to empty lists')
+-            config['filtering'] = False
++        if len(wl_rx) + len(bl_rx) == 0:
++            logging.info('FILTERING: REGEX filtering DISABLED due to empty lists')
++            config['use_regex'] = False
++
++        if config['use_regex'] is False and (len(wl_dom) + len(bl_dom) == 0):
++            logging.info('FILTERING: REQUEST filtering DISABLED due to empty lists')
+             config['filter_request'] = False
+-            config['filter_response'] = False
+-        else:
+-            logging.info('LIST-TOTALS [WHITELIST]: {0} Domains, {1} IPv4-Addresses, {2} IPv6-Addresses and {3} Regexes'.format(len(wl_dom), len(wl_ip4), len(wl_ip6), len(wl_rx)))
+-            logging.info('LIST-TOTALS [BLACKLIST]: {0} Domains, {1} IPv4-Addresses, {2} IPv6-Addresses and {3} Regexes'.format(len(bl_dom), len(bl_ip4), len(bl_ip6), len(bl_rx)))
+-            logging.info('LIST-TOTALS [GENERIC]: {0} Aliases, {1} Selective-Forwarders, {2} UnlistDoms, {3} UnlistIP4s and {4} UnlistIP6s'.format(len(alias), len(forwarder), len(ul_dom), len(ul_ip4), len(ul_ip6)))
++
++            if len(wl_ip4) + len(bl_ip4) + len(wl_ip6) + len(bl_ip6) == 0:
++                logging.info('FILTERING: REQUEST filtering DISABLED due to empty lists')
++                config['filter_response'] = False
++
++        logging.info('LIST-TOTALS [WHITELIST]: {0} Domains, {1} IPv4-Addresses, {2} IPv6-Addresses and {3} Regexes'.format(len(wl_dom), len(wl_ip4), len(wl_ip6), len(wl_rx)))
++        logging.info('LIST-TOTALS [BLACKLIST]: {0} Domains, {1} IPv4-Addresses, {2} IPv6-Addresses and {3} Regexes'.format(len(bl_dom), len(bl_ip4), len(bl_ip6), len(bl_rx)))
++        logging.info('LIST-TOTALS [GENERIC]: {0} Aliases, {1} Selective-Forwarders, {2} UnlistDoms, {3} UnlistIP4s and {4} UnlistIP6s'.format(len(alias), len(forwarder), len(ul_dom), len(ul_ip4), len(ul_ip6)))
+ 
+ 
+     wl_dom_trie = make_trie(wl_dom, 'Whitelist', False)

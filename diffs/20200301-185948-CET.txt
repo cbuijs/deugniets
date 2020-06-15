@@ -1,0 +1,32 @@
+diff --git a/deugniets.py b/deugniets.py
+index 221e845..fb91e82 100644
+--- a/deugniets.py
++++ b/deugniets.py
+@@ -1,7 +1,7 @@
+ #!/usr/bin/env python3
+ '''
+ ===========================================================================
+- deugniets.py v2.74-20200221 Copyright 2019-2020 by cbuijs@chrisbuijs.com
++ deugniets.py v2.741-20200221 Copyright 2019-2020 by cbuijs@chrisbuijs.com
+ ===========================================================================
+ 
+  Based on: https://github.com/supriyo-biswas/adblock-dns-server
+@@ -1652,6 +1652,9 @@ def dns_query(name, rdclass, rdtype, qid, cip, unfilter, fttl):
+ 
+                 if fwdtag in ('DEFAULT', 'GLOBAL') and config['filtering'] and config['filter_response'] and unfilter is False:
+                     response.answer = normttl(qname, response.answer, qid, fttl)
++                    #response.authority = normttl(qname, response.authority, qid, fttl)
++                    #response.additional = normttl(qname, response.additional, qid, fttl)
++
+                     if returnstatus != 'OK': # eg, not WHITELISTED
+                         status = False
+                     else:
+@@ -1736,6 +1739,8 @@ def dns_query(name, rdclass, rdtype, qid, cip, unfilter, fttl):
+                 else:
+                     status = None
+                     response.answer = normttl(qname, response.answer, qid, fttl)
++                    #response.authority = normttl(qname, response.authority, qid, fttl)
++                    #response.additional = normttl(qname, response.additional, qid, fttl)
+ 
+                 if status is not True:
+                     response.answer = collapse(qname, response.answer, qid)

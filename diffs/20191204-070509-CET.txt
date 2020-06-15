@@ -1,0 +1,120 @@
+diff --git a/deugniets.py b/deugniets.py
+index 0413372..555e85e 100644
+--- a/deugniets.py
++++ b/deugniets.py
+@@ -1,7 +1,7 @@
+ #!/usr/bin/env python3
+ '''
+ =======================================================================
+- deugniets.py v2.598-20191203 Copyright 2019 by cbuijs@chrisbuijs.com
++ deugniets.py v2.599-20191204 Copyright 2019 by cbuijs@chrisbuijs.com
+ =======================================================================
+ 
+  Based on: https://github.com/supriyo-biswas/adblock-dns-server
+@@ -121,6 +121,8 @@ command_acl6['0::1/128'] = True
+ 
+ # vars
+ dummy = '#!#!DUMMY!#!#'
++abusecount = 0
++maxabusecount = 1000
+ 
+ # Domain Regex
+ is_dom = regex.compile('(?=^.{1,253}[a-z][\.]*$)(^((?!-)[a-z0-9_-]{0,62}[a-z0-9]\.)*(xn--[a-z0-9-]{1,59}|[a-z]{2,63})[\.]*$)', regex.I) # Includes underscore
+@@ -391,7 +393,7 @@ def read_list(filenames, listname, domlst, ip4lst, ip6lst, rxlst, unlst, unip4,
+ 
+                     elif config['filter_response'] and is_ip6.search(entry):
+                         if entry.startswith(':'):
+-                            entry = '0' + entry
++                            entry = '0{0}'.format(entry)
+                         ip6lst[entry] = entry
+ 
+                     elif (config['filter_request'] or config['filter_response']) and is_dom.search(entry):
+@@ -1012,6 +1014,9 @@ def check_ip(valuetype, testvalue, orgtestvalue, iplist, listname, rc):
+ 
+ #!!!! FIX - Checks loopback somehow. !!!!
+ def check_badip(cip):
++    global abusecount
++    global maxabusecount
++
+     if is_ip.search(cip):
+         if cip.find(':') > 0:
+             wl_ip = wl_ip6
+@@ -1034,30 +1039,51 @@ def check_badip(cip):
+             score = False
+             ipcheck = False
+ 
+-            try:
+-                #logging.debug('ABUSEIPDB-CHECK: {0}'.format(cip))
++            #logging.debug('ABUSEIPDB-CHECK: {0}'.format(cip))
+ 
+-                url = 'https://api.abuseipdb.com/api/v2/check'
+-                querystring = {'ipAddress': cip, 'maxAgeInDays': '90'}
+-                headers = {'Accept': 'application/json', 'Key': config['abuseipdbkey']}
++            url = 'https://api.abuseipdb.com/api/v2/check'
++            querystring = {'ipAddress': cip, 'maxAgeInDays': '90'}
++            headers = {'Accept': 'application/json', 'Key': config['abuseipdbkey']}
+ 
+-                response = abuseipdb_session.get(url, timeout=5, headers=headers, params=querystring, allow_redirects=False, proxies=None, stream=True)
+-                ipcheck = json.loads(response.text)
++            if abusecount < 500:
++                count = 0
++                while count < 3:
++                    count += 1
++                    abusecount += 1
+ 
+-                #logging.debug('ABUSEIPDB-JSON-DEBUG: {0}'.format(json.dumps(ipcheck, sort_keys=True, indent=4)))
++                    try:
++                        response = abuseipdb_session.get(url, timeout=5, headers=headers, params=querystring, allow_redirects=False, proxies=None, stream=True)
++                        if response:
++                            if response.status_code == 200:
++                                ipcheck = json.loads(response.text)
++                                break
++                            else:
++                                logging.error('ABUSEIPDB-GET-ERROR: {0} - {1}'.format(cip, response.status_code))
+ 
+-            except BaseException as err:
+-                logging.error('ABUSEIPDB-ERROR: {0} - {1}'.format(cip, err))
++                            #logging.debug('ABUSEIPDB-JSON-DEBUG: {0}'.format(json.dumps(ipcheck, sort_keys=True, indent=4)))
+ 
+-            if ipcheck:
+-                score = ipcheck['data']['abuseConfidenceScore']
+-                logging.info('ABUSEIPDB-SCORE: {0} = {1}% ({2} - {3})'.format(cip, score, ipcheck['data']['countryCode'], ipcheck['data']['isp']))
++                    except BaseException as err:
++                        logging.error('ABUSEIPDB-ERROR: {0} - {1}'.format(cip, err))
++
++                    time.sleep(0.3)
++
++                if ipcheck:
++                    score = ipcheck['data']['abuseConfidenceScore']
++                    logging.info('ABUSEIPDB-SCORE: {0} = {1}% ({2} - {3})'.format(cip, score, ipcheck['data']['countryCode'], ipcheck['data']['isp']))
++
++                    if score and score > 90:
++                        if config['log_hits']:
++                            logging.warning('ABUSEIPDB-BLACKLIST-HIT: Score for Client {0} = {1}%'.format(cip, score))
++                        bl_ip[cip] = True
++                        return True
++
++                else:
++                    logging.error('ABUSEIPDB-ERROR: {0} - No/Empty Response'.format(cip))
++                    abusecount = maxabusecount
++
++            else:
++                logging.warning('ABUSEIPDB: {0} - Maximum requests ({1}) hit'.format(cip, maxabusecount))
+ 
+-                if score and score > 90:
+-                    if config['log_hits']:
+-                        logging.warning('ABUSEIPDB-BLACKLIST-HIT: Score for Client {0} = {1}%'.format(cip, score))
+-                    bl_ip[cip] = True
+-                    return True
+ 
+         if dnsl_check(config['dnsbl'], cip, True):
+             if config['log_hits']:
+@@ -1205,6 +1231,8 @@ def dns_query(name, rdclass, rdtype, qid, cip, unfilter, fttl):
+     qname = str(name)
+     qrdtype = str(dns.rdatatype.to_text(rdtype))
+     cip = str(cip)
++    if cip.startswith(':'):
++        cip = '0{0}'.format(cip)
+ 
+     cachename = '{0}/IN/{1}'.format(qname, qrdtype)
+ 

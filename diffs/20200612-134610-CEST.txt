@@ -1,0 +1,33 @@
+diff --git a/deugniets.py b/deugniets.py
+index 27a8382..9058fb6 100644
+--- a/deugniets.py
++++ b/deugniets.py
+@@ -1612,7 +1612,7 @@ def geosteer(cip, qname, answer):
+ 
+         geoinfo = geo(cip)
+         steerlist = geonames(geoinfo)
+-        logging.info('STEERLIST: {0} ({1}) -> {2}'.format(cip, geoinfo, ', '.join(steerlist)))
++        logging.info('STEERLIST: {0} -> {1}'.format(cip, ', '.join(steerlist)))
+ 
+         if steerlist:
+             new_answer = []
+@@ -1623,16 +1623,17 @@ def geosteer(cip, qname, answer):
+                 rrdatalist = list(map(str, rrset))
+                 newrrdata = list()
+                 geodata = set()
++                #if rrset.rdtype in (1, 28) and len(rrdatalist) > 1:
+                 if rrset.rdtype == ciptype and len(rrdatalist) > 1:
+                     for ip in rrdatalist:
+                         geoname = check_geo(qname, 'IP', ip, steerlist, 'GEOSTEER')
+                         if geoname:
+-                            logging.info('GEO-STEER: Client IP {0} ({1}) close to {2} ({3}) for {4}/{5}'.format(cip, geoinfo, ip, geoname, rrname, rdtypet))
++                            logging.info('GEO-STEER: Client {0} ({1}) close to {2} ({3}) for {4}/{5}'.format(cip, geoinfo, ip, geoname, rrname, rdtypet))
+                             newrrdata.append(ip)
+                             geodata.add(geoname)
+                 
+                 if newrrdata and geodata and len(newrrdata) < len(rrdatalist):
+-                    logging.info('GEO-STEER: {0}/{1} from {2} to {3} answers (~ {4})'.format(rrname, rdtypet, len(rrdatalist), len(newrrdata), ', '.join(geodata)))
++                    logging.info('GEO-STEER: {0}/{1} from {2} to {3} answers (Client {4} ~ {5})'.format(rrname, rdtypet, len(rrdatalist), len(newrrdata), cip, ', '.join(geodata)))
+                     rrdatalist = newrrdata
+ 
+                 new_answer.append(dns.rrset.from_text_list(rrname, ttl, 'IN', rdtypet, rrdatalist))

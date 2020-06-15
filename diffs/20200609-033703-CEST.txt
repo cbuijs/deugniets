@@ -1,0 +1,108 @@
+diff --git a/Dockerfile b/Dockerfile
+index 5b3f4b5..de814d3 100644
+--- a/Dockerfile
++++ b/Dockerfile
+@@ -17,7 +17,7 @@ RUN pip3 install --upgrade chardet==3.0.4
+ RUN pip3 install --upgrade urllib3==1.25.7
+ RUN pip3 install --upgrade git+https://github.com/opendns/dnspython-clientsubnetoption@master
+ RUN pip3 install --upgrade git+https://github.com/rthalley/dnspython@master
+-RUN pip3 install --upgrade git+https://github.com/psf/requests@master
++#RUN pip3 install --upgrade git+https://github.com/psf/requests@master
+ RUN pip3 install --upgrade -r requirements.txt
+ CMD [ "python3", "deugniets.py", "deugniets.conf" ]
+ 
+diff --git a/deugniets.conf.docker b/deugniets.conf.docker
+index c302aab..3cd1280 100644
+--- a/deugniets.conf.docker
++++ b/deugniets.conf.docker
+@@ -1,8 +1,7 @@
+ [DEUGNIETS]
+ port = 53
+ 
+-nameservers = ["https://dns11.quad9.net/dns-query#9.9.9.11,149.112.112.11,2620:fe::11,2620:fe::fe:11"]
+-safe_nameservers = false
++nameservers = ["9.9.9.9", "149.112.112.9", "2620:fe::9", "2620:fe::fe:9"]
+ 
+ optimize = false
+ whitelist = ["local.list", "https://raw.githubusercontent.com/cbuijs/accomplist/master/deugniets/deugniets.white.list"]
+diff --git a/deugniets.py b/deugniets.py
+index 4d7c8c7..c6bea18 100644
+--- a/deugniets.py
++++ b/deugniets.py
+@@ -1,7 +1,7 @@
+ #!/usr/bin/env python3
+ '''
+ ===========================================================================
+- deugniets.py v3.15-20200604 Copyright 2019-2020 by cbuijs@chrisbuijs.com
++ deugniets.py v3.16-20200609 Copyright 2019-2020 by cbuijs@chrisbuijs.com
+ ===========================================================================
+ 
+  Based on: https://github.com/supriyo-biswas/adblock-dns-server
+@@ -465,8 +465,8 @@ def read_list(filenames, listname, domlst, ip4lst, ip6lst, rxlst, unlst, unip4,
+         ftype = False
+         if filename.find(':') > -1:
+             ft = filename.split(':')[0].upper()
+-            filename = filename.split(':')[1]
+             if ft in ('IP', 'DOM', 'DOMWORD', 'GEO', 'ALIAS', 'FORWARD', 'TTL', 'UNFILTER', 'RX'):
++                filename = filename.split(':')[1]
+                 ftype = ft
+                 logging.info('PROCESS-LIST ({0}): {1}-LIST ...'.format(filename, ftype))
+         else:
+@@ -640,7 +640,7 @@ def addzero(entry):
+ 
+ def get_lines(filename, listname):
+     '''Get all lines from file or URL'''
+-    #logging.debug('GET-LINES: {0} - {1}'.format(filename, listname))
++    #logging.info('GET-LINES: {0} - {1}'.format(filename, listname))
+     lines = False
+ 
+     if filename.startswith('http://') or filename.startswith('https://'):
+@@ -3113,15 +3113,15 @@ def run_server():
+ 
+     logging.info('SERVER: DeugNietS Starting on port {0}'.format(dnsport))
+ 
+-    udp_server4 = ThreadedUDPServer4(('0.0.0.0', dnsport), UDPHandler)
+-    udp_server6 = ThreadedUDPServer6(('::', dnsport), UDPHandler)
++    udp_server4 = ThreadedUDPServer4(('', dnsport), UDPHandler)
++    udp_server6 = ThreadedUDPServer6(('', dnsport), UDPHandler)
+     udp_server_thread4 = threading.Thread(target=udp_server4.serve_forever)
+     udp_server_thread6 = threading.Thread(target=udp_server6.serve_forever)
+ 
+-    tcp_server4 = ThreadedTCPServer4(('127.0.0.1', dnsport), TCPHandler)
+-    tcp_server6 = ThreadedTCPServer6(('::1', dnsport), TCPHandler)
+-    tcp_server_thread4 = threading.Thread(target=tcp_server4.serve_forever)
+-    tcp_server_thread6 = threading.Thread(target=tcp_server6.serve_forever)
++    #tcp_server4 = ThreadedTCPServer4(('', dnsport), TCPHandler)
++    #tcp_server6 = ThreadedTCPServer6(('', dnsport), TCPHandler)
++    #tcp_server_thread4 = threading.Thread(target=tcp_server4.serve_forever)
++    #tcp_server_thread6 = threading.Thread(target=tcp_server6.serve_forever)
+ 
+     newnameservers = list()
+ 
+@@ -3279,20 +3279,20 @@ def run_server():
+     logging.info('SERVER: DeugNietS Started - Accepting DNS requests on port {0}'.format(dnsport))
+ 
+     try:
+-        for thread in [udp_server_thread4, tcp_server_thread4, udp_server_thread6, tcp_server_thread6]:
+-        #for thread in [udp_server_thread4, udp_server_thread6]:
++        #for thread in [udp_server_thread4, tcp_server_thread4, udp_server_thread6, tcp_server_thread6]:
++        for thread in [udp_server_thread4, udp_server_thread6]:
+             thread.start()
+ 
+-        for thread in [udp_server_thread4, tcp_server_thread4, udp_server_thread6, tcp_server_thread6]:
+-        #for thread in [udp_server_thread4, udp_server_thread6]:
++        #for thread in [udp_server_thread4, tcp_server_thread4, udp_server_thread6, tcp_server_thread6]:
++        for thread in [udp_server_thread4, udp_server_thread6]:
+             thread.join()
+ 
+     except (KeyboardInterrupt, SystemExit):
+         pass
+ 
+     finally:
+-        for server in [udp_server4, tcp_server4, udp_server6, tcp_server6]:
+-        #for server in [udp_server4, udp_server6]:
++        #for server in [udp_server4, tcp_server4, udp_server6, tcp_server6]:
++        for server in [udp_server4, udp_server6]:
+             server.shutdown()
+             server.server_close()
+ 

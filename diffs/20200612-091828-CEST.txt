@@ -1,0 +1,120 @@
+diff --git a/deugniets.py b/deugniets.py
+index eff8d43..9cf1e11 100644
+--- a/deugniets.py
++++ b/deugniets.py
+@@ -1,7 +1,7 @@
+ #!/usr/bin/env python3
+ '''
+ ===========================================================================
+- deugniets.py v3.191-20200611 Copyright 2019-2020 by cbuijs@chrisbuijs.com
++ deugniets.py v3.20-20200612 Copyright 2019-2020 by cbuijs@chrisbuijs.com
+ ===========================================================================
+ 
+  Based on: https://github.com/supriyo-biswas/adblock-dns-server
+@@ -1615,8 +1615,6 @@ def geosteer(cip, qname, answer):
+         steerlist = geonames(geo(gcip))
+ 
+         if steerlist:
+-            #logging.info('GEO-STEER: Will be using {0} for {1}/{2}'.format('/'.join(steerlist), cip, gcip))
+-        
+             new_answer = []
+             for rrset in answer:
+                 rrname = str(rrset.name)
+@@ -1629,11 +1627,8 @@ def geosteer(cip, qname, answer):
+                     for ip in rrdatalist:
+                         geoname = check_geo(qname, 'IP', ip, steerlist, 'GEOSTEER')
+                         if geoname:
+-                            #logging.info('GEO-STEER: {0}/{1} = {2} (~ {3})'.format(rrname, rdtypet, ip, geoname))
+                             newrrdata.append(ip)
+                             geodata.add(geoname)
+-                        #else:
+-                        #    logging.info('GEO-STEER: {0}/{1} = {2} (~ {3} = NO-PREF)'.format(rrname, rrset.rdtypet, ip, geo(ip)))
+                 
+                 if newrrdata and geodata and len(newrrdata) < len(rrdatalist):
+                     logging.info('GEO-STEER: {0}/{1} from {2} to {3} answers (~ {4})'.format(rrname, rdtypet, len(rrdatalist), len(newrrdata), ', '.join(geodata)))
+@@ -1747,35 +1742,29 @@ def dns_query(name, rdclass, rdtype, qid, cip, unfilter, fttl):
+     ip6 = None
+ 
+     if is_ip.search(cip):
++        ip6 = False
++        bits = config['cache_ip4_bits'] or 24
+         if cip.find(':') > -1:
+             ip6 = True
+-        else:
+-            ip6 = False
++            bits = config['cache_ip6_bits'] or 56
+ 
+-        if cip not in private4 and cip not in private6:
+-            cachename = '{0}/PUBLIC'.format(cachename)
++        cache_ip = '{0}'.format(IP(cip).make_net(str(bits)).strNormal(0))
++        logging.info('CACHE-IP: {0} -> {1}'.format(cip, cache_ip))
++        cachename = '{0}/{1}'.format(cachename, cache_ip)
+ 
+-        #if config['use_ecs_ip']:
+-        tag = 'IP4'
+-        if ip6:
+-            tag = 'IP6'
+-
+-        cachename = '{0}/{1}'.format(cachename, tag)
++        #if cip not in private4 and cip not in private6:
++        #    cachename = '{0}/PUBLIC'.format(cachename)
+ 
+     else:
+         unfilter = True
+ 
+     if unfilter:
+-        cachename = '{0}/{1}'.format(cachename, cip)
+-        #cachename = '{0}/UNFILTER'.format(cachename)
++        #cachename = '{0}/IN/{1}/{2}'.format(qname, qrdtype, cip)
++        cachename = '{0}/IN/{1}/UNFILTER'.format(qname, qrdtype, cip)
+         if ip6 is None:
+             logging.info('INTERNAL-{0}-UNFILTER: {1}'.format(cip, cachename))
+ 
+-    # !!! CHECK for smartip-caching, probably already covered by abive IP4/6 tag
+-    #if unfilter or config['smartip']:
+-    #   if unfilter:
+-    #       returnstatus = 'OK-UNFILTERED'
+-    #    cachename = '{0}/{1}'.format(cachename, cip)
++    logging.info('CACHE-NAME: {0}'.format(cachename))
+ 
+     if not unfilter:
+         if qrdtype == 'ANY' and config['blockany']:
+@@ -2922,7 +2911,8 @@ def handle_query(raw_data, client_ip):
+ 
+             elif (cip in ul_ip4 or cip in ul_ip6):
+                 unfilter = True
+-                logging.info('UNFILTER-IP [{0}]: {1}'.format(query.id, cip))
++                if config['log_unfilter']:
++                    logging.info('UNFILTER-IP [{0}]: {1}'.format(query.id, cip))
+                 unfilter_cache.add(obj=CachedObject(name=cip, obj=True, ttl=604800)) # 7 days
+ 
+             else:
+@@ -2930,7 +2920,8 @@ def handle_query(raw_data, client_ip):
+                 match = check_dom_trie('NAME', name, ul_dom_trie, 'UNFILTER', False, False)
+                 if match:
+                     unfilter = True
+-                    unfilter_cache.add(obj=CachedObject(name=name, obj=True, ttl=config['unfilter_ttl']))
++                    if config['log_unfilter']:
++                        unfilter_cache.add(obj=CachedObject(name=name, obj=True, ttl=config['unfilter_ttl']))
+                     logging.info('UNFILTER-NAME [{0}]: From {1} for {2} ({3})'.format(query.id, cip, queryname, match))
+ 
+ 
+@@ -3382,6 +3373,10 @@ if __name__ == '__main__':
+     config['override_ecs_ip4'] = False
+     config['override_ecs_ip6'] = False
+ 
++    # Cache-subnet params
++    config['cache_ip4_bits'] = 24
++    config['cache_ip6_bits'] = 56
++
+     # Random RoundRobin
+     config['roundrobin'] = True
+     config['randomroundrobin'] = False
+@@ -3428,6 +3423,7 @@ if __name__ == '__main__':
+     config['log_collapse'] = False
+     config['log_verbose'] = False
+     config['log_ecs'] = False
++    config['log_unfilter'] = False
+ 
+     # Return codes
+     config['blacklist_rcode'] = 'REFUSED'

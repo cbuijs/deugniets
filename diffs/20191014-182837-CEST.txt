@@ -1,0 +1,55 @@
+diff --git a/deugniets.conf b/deugniets.conf
+index 8e9850c..e7f701d 100644
+--- a/deugniets.conf
++++ b/deugniets.conf
+@@ -116,6 +116,6 @@ optimize = false
+ #whitelist = ["/opt/deugniets/alias.list", "/opt/accomplist/deugniets/plain.white.regex.list", "/opt/accomplist/deugniets/optimized.white.domain.list", "/opt/accomplist/deugniets/plain.white.ip4cidr.list", "/opt/accomplist/deugniets/plain.white.ip6cidr.list"]
+ #blacklist = ["/opt/accomplist/chris/regex.black", "/opt/accomplist/deugniets/plain.black.regex.list", "/opt/accomplist/deugniets/optimized.black.domain.list", "/opt/accomplist/deugniets/plain.black.ip4cidr.list", "/opt/accomplist/deugniets/plain.black.ip6cidr.list"]
+ 
+-#whitelist = ["/opt/deugniets/alias.list", "/opt/deugniets/doh.alias.list", "/opt/accomplist/chris/connectivity-check.list", "/opt/accomplist/dnsdist/deugniets.white.list", "/opt/accomplist/chris/white.special", "/opt/accomplist/chris/private-addresses.list"]
+-#blacklist = ["/opt/deugniets/black.list", "/opt/accomplist/dnsdist/deugniets.black.list","/opt/accomplist/family-safe/deugniets.black.list", "/opt/accomplist/malicious-ip/deugniets.black.list"]
++whitelist = ["/opt/deugniets/alias.list", "/opt/deugniets/doh.alias.list", "/opt/accomplist/chris/connectivity-check.list", "/opt/accomplist/dnsdist/deugniets.white.list", "/opt/accomplist/chris/white.special", "/opt/accomplist/chris/private-addresses.list"]
++blacklist = ["/opt/deugniets/black.list", "/opt/accomplist/dnsdist/deugniets.black.list","/opt/accomplist/family-safe/deugniets.black.list", "/opt/accomplist/malicious-ip/deugniets.black.list"]
+ 
+diff --git a/deugniets.py b/deugniets.py
+index 8df7d62..50039ba 100644
+--- a/deugniets.py
++++ b/deugniets.py
+@@ -1,7 +1,7 @@
+ #!/usr/bin/env python3
+ '''
+ =======================================================================
+- deugniets.py v2.36-20191013 Copyright 2019 by cbuijs@chrisbuijs.com
++ deugniets.py v2.365-20191014 Copyright 2019 by cbuijs@chrisbuijs.com
+ =======================================================================
+ 
+  Based on: https://github.com/supriyo-biswas/adblock-dns-server
+@@ -757,9 +757,17 @@ def check_if_blacklisted(testvalue, valuetype, checkip):
+     if checkip is False and is_dom.search(testvalue):
+         #logging.debug('CHECK-{0}: \"{1}\" is a DOMAIN'.format(valuetype, testvalue))
+ 
+-        if check_dom(valuetype, testvalue, wl_dom, 'WHITELIST', False, False): # Whitelisted
++        wmatch = check_dom(valuetype, testvalue, wl_dom, 'WHITELIST', False, False) # Whitelisted
++        if wmatch:
++            bmatch = check_dom(valuetype, testvalue, bl_dom, 'BLACKLIST', False, True)
++            match = '{0}{1}'.format(bmatch, wmatch)
++            logging.debug('MATCHING-DEBUG: DOM:{0} - WHITE:{1} - BLACK:{2}'.format(testvalue, wmatch, bmatch))
++            if bmatch and (testvalue == match or testvalue.endswith('.{0}'.format(match))):
++                return True
+             return False
+     
++        #### !!!! NEED TO DO THE SAME WHITE/BLACK-COMBO MATCHING AS ABOVE FOR THE REST !!!! ####
++
+         if check_rx(valuetype, orgtestvalue, wl_rx, 'WHITELIST'):
+             return False
+ 
+@@ -1735,6 +1743,9 @@ def log_helper(qname, qrdtype, result, tag, qid):
+ def log_response(qname, qtype, answer, rcode, tag, spoofedname, qid):
+     #logging.debug('DEBUG-{0}: {1}'.format(tag, answer))
+     if config['log_responses']:
++        if isinstance(qtype, int):
++            qtype = dns.rdatatype.to_text(qtype)
++
+         if isinstance(rcode, int):
+             rcode = dns.rcode.to_text(rcode)
+ 

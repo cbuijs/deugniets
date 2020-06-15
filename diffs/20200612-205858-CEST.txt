@@ -1,0 +1,226 @@
+diff --git a/deugniets.py b/deugniets.py
+index 58af98f..afefe8d 100644
+--- a/deugniets.py
++++ b/deugniets.py
+@@ -1,7 +1,7 @@
+ #!/usr/bin/env python3
+ '''
+ ===========================================================================
+- deugniets.py v3.25-20200612 Copyright 2019-2020 by cbuijs@chrisbuijs.com
++ deugniets.py v3.26-20200612 Copyright 2019-2020 by cbuijs@chrisbuijs.com
+ ===========================================================================
+ 
+  Based on: https://github.com/supriyo-biswas/adblock-dns-server
+@@ -126,25 +126,25 @@ check_cache_size = 8192
+ #big_trie_size = 512
+ 
+ # Lists
+-wl_dom = dict()
+-bl_dom = dict()
++wl_dom = {}
++bl_dom = {}
+ wl_ip4 = pytricia.PyTricia(32, socket.AF_INET)
+ bl_ip4 = pytricia.PyTricia(32, socket.AF_INET)
+ wl_ip6 = pytricia.PyTricia(128, socket.AF_INET6)
+ bl_ip6 = pytricia.PyTricia(128, socket.AF_INET6)
+-wl_rx = dict()
+-bl_rx = dict()
+-wl_geo = dict()
+-bl_geo = dict()
+-alias = dict()
+-forwarder = dict()
++wl_rx = {}
++bl_rx = {}
++wl_geo = {}
++bl_geo = {}
++alias = {}
++forwarder = {}
+ beingchecked = set()
+ beingspoofed = set()
+-ul_dom = dict()
++ul_dom = {}
+ ul_ip4 = pytricia.PyTricia(32, socket.AF_INET)
+ ul_ip6 = pytricia.PyTricia(128, socket.AF_INET6)
+ 
+-blacklisted_state = dict()
++blacklisted_state = {}
+ blacklisted_state[True] = 'BLACKLISTED'
+ blacklisted_state[False] = 'WHITELISTED'
+ blacklisted_state[None] = 'NOT-LISTED'
+@@ -303,7 +303,7 @@ def undom(domlist1, domlist2, listname, onlysub):
+     name1, name2 = listname.split('-')[0:2]
+     if domlist1 and domlist2:
+         logging.info('UNDOM [{0}]: Optimizing List, removing matching sub-domains ...'.format(listname))
+-        newdomlist = dict()
++        newdomlist = {}
+         beforecount = len(domlist1)
+         for dom in domlist1:
+             match = check_dom('NAME', dom, domlist2, False, False, False)
+@@ -327,7 +327,7 @@ def unreg(domlist, bigrx, listname):
+     if domlist and bigrx and bigrx != regex.compile(dummy):
+         logging.info('UNREG [{0}]: Optimizing List, removing REGEX matches ...'.format(listname))
+         remove = filter(bigrx.search, domlist.keys())
+-        newdomlist = dict()
++        newdomlist = {}
+         beforecount = len(domlist)
+         for dom in domlist:
+             if dom in remove:
+@@ -344,7 +344,7 @@ def unreg(domlist, bigrx, listname):
+ 
+     #if domlist and bigrx and bigrx != regex.compile(dummy):
+     #    logging.info('UNREG [{0}]: Optimizing List, removing REGEX matches ...'.format(listname))
+-    #    newdomlist = dict()
++    #    newdomlist = {}
+     #    beforecount = len(domlist)
+     #    for dom in domlist:
+     #        match = bigrx.search(dom.rstrip('.'))
+@@ -1577,7 +1577,7 @@ def rrrr(response):
+ 
+             if rrset.rdtype in (1, 28) and len(rrset) > 1:
+                 #logging.debug('ROUNDROBIN-BEFORE: {0}/{1} = {2}'.format(rrname, rdtypet,', '.join(list(map(str, rrset)))))
+-                newrrdata = list()
++                newrrdata = []
+                 if config['randomroundrobin']:
+                     r = random.randint(1, len(rrset))
+                 else:
+@@ -1606,9 +1606,12 @@ def geonames(geoname):
+    
+ def geosteer(cip, qname, answer):
+     if config['geo_steer'] and is_ip.search(cip) and answer:
+-        #ciptype = 1
+-        #if cip.find(':') > -1:
+-        #    ciptype = 28
++        if cip.find(':') < 0 and cip in private4 and config['override_ecs_ip4']:
++            logging.info('GEO-STEER: Private IP {0} -> {1}'.format(cip, config['override_ecs_ip4']))
++            cip = config['override_ecs_ip4']
++        elif cip.find(':') > -1 and cip in private6 and config['override_ecs_ip6']:
++            logging.info('GEO-STEER: Private IP {0} -> {1}'.format(cip, config['override_ecs_ip6']))
++            cip = config['override_ecs_ip6']
+ 
+         geoinfo = geo(cip)
+         steerlist = geonames(geoinfo)
+@@ -1622,10 +1625,10 @@ def geosteer(cip, qname, answer):
+                 rdtypet = dns.rdatatype.to_text(rrset.rdtype)
+                 ttl = int(rrset.ttl)
+                 rrdatalist = list(map(str, rrset))
+-                newrrdata = list()
++                newrrdata = []
+                 geodata = set()
+-                #if rrset.rdtype == ciptype and len(rrdatalist) > 1:
+                 if rrset.rdtype in (1, 28) and len(rrdatalist) > 1:
++                    #logging.info('GEO-STEER: Orginal order: {0}/{1} = {2}'.format(rrname, rdtypet, ', '.join(rrdatalist)))
+                     for ip in rrdatalist:
+                         if config['log_verbose']:
+                             logging.info('GEO-STEER-RR: {0}/{1} = {2} ({3})'.format(rrname, rdtypet, ip, geo(ip)))
+@@ -1634,8 +1637,13 @@ def geosteer(cip, qname, answer):
+                         if geoname:
+                             if config['log_verbose']:
+                                 logging.info('GEO-STEER: Client {0} ({1}) close to {2} ({3}) for {4}/{5}'.format(cip, geoinfo, ip, geoname, rrname, rdtypet))
++                        #    newrrdata.insert(0, ip)
+                             newrrdata.append(ip)
+                             geodata.add(geoname)
++                        #else:
++                        #    newrrdata.append(ip)
++
++                    #logging.info('GEO-STEER: New order: {0}/{1} = {2}'.format(rrname, rdtypet, ', '.join(newrrdata)))
+                 
+                 if newrrdata and geodata and len(newrrdata) < len(rrdatalist):
+                     logging.info('GEO-STEERED: {0}/{1} from {2} to {3} answers (Client {4} ~ {5})'.format(rrname, rdtypet, len(rrdatalist), len(newrrdata), cip, ', '.join(geodata)))
+@@ -1658,7 +1666,7 @@ def collapse(name, rdtype, answer, qid):
+                 beforecount = 0
+                 aftercount = 0
+                 removed = 0
+-                newrrdata = list()
++                newrrdata = []
+ 
+                 for rrset in answer:
+                     ttl = int(rrset.ttl)
+@@ -1823,7 +1831,7 @@ def dns_query(name, rdclass, rdtype, qid, cip, unfilter, fttl):
+                 clear_caches()
+ 
+             elif command == 'STATS':
+-                hitlist = dict()
++                hitlist = {}
+                 for entry in cache.entries():
+                     hitlist[entry.name] = entry.hits
+ 
+@@ -1986,7 +1994,7 @@ def dns_query(name, rdclass, rdtype, qid, cip, unfilter, fttl):
+                                 rv = (dns.rcode.SERVFAIL, [], [], [])
+                             elif spoof == 'RANDOM':
+                                 if qrdtype != 'CNAME':
+-                                    addrs = list()
++                                    addrs = []
+                                     for i in range(0, random.randint(0, 8)):
+                                         if qrdtype == 'A':
+                                             addrs.append(str(random.randint(0, 255)) + '.' + str(random.randint(0, 255)) + '.' + str(random.randint(0, 255)) + '.' + str(random.randint(0, 255)))
+@@ -2396,20 +2404,20 @@ def root_resolve(qname, qtype):
+                     elif response.authority:
+                         addr = False
+                         if response.additional:
+-                            addr = list()
++                            addr = []
+                             for rrset in response.additional:
+                                 if str(rrset.name) == rqname and rrset.rdtype in (1, 28): # Get A/AAAA
+                                    addr +=list(map(str, rrset))
+ 
+                         if not addr:
+                             # Fetch A/AAAA for NS and stick into nsaddr
+-                            ns = list()
++                            ns = []
+                             for rrset in response.authority:
+                                 if str(rrset.name) == rqname and rrset.rdtype == 2: # Get NS
+                                    ns +=list(map(str, rrset))
+ 
+                             if ns:
+-                                addr = list()
++                                addr = []
+                                 for nsname in ns:
+                                    for rrtype in (1, 28):
+                                        logging.info('ROOT-RESOLVE: Query for {0} to {1}'.format(nsname, ', '.join(nsaddr)))
+@@ -2986,7 +2994,7 @@ def handle_query(raw_data, client_ip):
+     #        expire = int(time.time() + ttl)
+     #        rrname = str(rrset.name)
+     #        rrdtype = dns.rdatatype.to_text(rrset.rdtype)
+-    #        rrdata = list()
++    #        rrdata = []
+     #        for rr in rrset:
+     #            if hasattr(rr, 'target'):
+     #                target = str(rr.target)
+@@ -3154,7 +3162,7 @@ def run_server():
+     tcp_server_thread4 = threading.Thread(target=tcp_server4.serve_forever)
+     tcp_server_thread6 = threading.Thread(target=tcp_server6.serve_forever)
+ 
+-    newnameservers = list()
++    newnameservers = []
+ 
+     # NextDNS Get best route/servers
+     if config['nextdns']:
+@@ -3341,7 +3349,7 @@ if __name__ == '__main__':
+     logging.info('SERVER: DeugNietS Starting ...')
+ 
+     # Default Settings
+-    config = dict()
++    config = {}
+ 
+     # Port to listen on
+     config['port'] = 53
+@@ -3516,6 +3524,10 @@ if __name__ == '__main__':
+     if config['rrtype_allow']:
+         config['rrtype_allow'] = list(map(str.upper, config['rrtype_allow']))
+ 
++    if config['geo_steer']:
++        config['roundrobin'] = False
++        config['randomroundrobin'] = False
++
+     # Create combined regex for speed
+     wl_big_rx = regex.compile(dummy)
+     bl_big_rx = regex.compile(dummy)
+@@ -3546,7 +3558,7 @@ if __name__ == '__main__':
+                 config['check_tld'] = False
+ 
+         wl_dom, wl_ip4, wl_ip6, wl_rx, ul_dom, ul_ip4, ul_ip6, wl_geo, alias, forwarder, = read_list(config['whitelist'], 'WhiteList', wl_dom, wl_ip4, wl_ip6, wl_rx, ul_dom, ul_ip4, ul_ip6, wl_geo, alias, forwarder )
+-        bl_dom, bl_ip4, bl_ip6, bl_rx, _, _, _, bl_geo, _, _ = read_list(config['blacklist'], 'BlackList', bl_dom, bl_ip4, bl_ip6, bl_rx, dict(), dict(), dict(), bl_geo, dict(), dict())
++        bl_dom, bl_ip4, bl_ip6, bl_rx, _, _, _, bl_geo, _, _ = read_list(config['blacklist'], 'BlackList', bl_dom, bl_ip4, bl_ip6, bl_rx, {}, {}, {}, bl_geo, {}, {})
+ 
+         if config['unfilter_whitelist']:
+             ul_dom = add_list(ul_dom, wl_dom.keys(), 'UNFILTER-WHITELIST')

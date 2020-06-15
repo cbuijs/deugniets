@@ -1,0 +1,13 @@
+diff --git a/deugniets.py b/deugniets.py
+index 1d2983a..27a8382 100644
+--- a/deugniets.py
++++ b/deugniets.py
+@@ -1607,7 +1607,7 @@ def geonames(geoname):
+ def geosteer(cip, qname, answer):
+     if config['geo_steer'] and is_ip.search(cip) and answer:
+         ciptype = 1
+-        if cip.fin(':') > -1:
++        if cip.find(':') > -1:
+             ciptype = 28
+ 
+         geoinfo = geo(cip)

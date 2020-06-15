@@ -1,0 +1,751 @@
+diff --git a/deugniets.py b/deugniets.py
+index 3d1d321..4a310f8 100644
+--- a/deugniets.py
++++ b/deugniets.py
+@@ -1,7 +1,7 @@
+ #!/usr/bin/env python3
+ '''
+ ===========================================================================
+- deugniets.py v2.90-20200430 Copyright 2019-2020 by cbuijs@chrisbuijs.com
++ deugniets.py v2.93-20200503 Copyright 2019-2020 by cbuijs@chrisbuijs.com
+ ===========================================================================
+ 
+  Based on: https://github.com/supriyo-biswas/adblock-dns-server
+@@ -14,6 +14,7 @@
+            https://www.maxmind.com
+ 
+  ToDo:
++ - Finish TRIE rework of domain-based dict's
+  - Refurbish whole stack of listeners, multi-threading etc
+    - Fix listening/response IP when responding (same IP out as in), IPv6
+    - Fix TCP listeners
+@@ -26,9 +27,7 @@
+    - Meh.
+ 
+ Half-Done:
+- - Bootstrap servers for getaddrinfo
+-   - Check/Validate/Test
+- - Fix round-robin on answers
++ - Fix round-robin on answers, 'rrrr' def
+    - Only A/AAAA, see rrrr
+    - Still seems random (see update_ttls maybe?)
+  - Reworking response logging
+@@ -52,6 +51,9 @@ Done:
+  - Ellaborate GeoIP to have combinations of City/Area/Country/Continent
+    - including CONTINENT:/COUNTRY:/AREA:/CITY: syntax
+  - Reworked block-specific, faster and more info during hit
++ - Bootstrap servers for getaddrinfo
++ - Fixed race condition between check_geo and check_iprev
++   - check_ip/iprev will be done first and then geo (other way around)
+ 
+ Do Not:
+  - Check/Investigate/Use Twisted names framework - Backburner
+@@ -116,6 +118,9 @@ from IPy import IP
+ # Sequencematcher
+ #from difflib import SequenceMatcher
+ 
++# Trie
++import pygtrie
++
+ # Stuff needed for DoH
+ import base64
+ 
+@@ -452,6 +457,20 @@ def encode_0x20(st):
+ def cleansplit(s):
+     return regex.split('\s*#\s*', s)[0].strip().rstrip('!')
+ 
++
++def make_trie(dlist, listname, keepval):
++    new_trie = pygtrie.StringTrie(separator='.')
++    for key in dlist.keys():
++        if keepval:
++            new_trie[key[::-1]] = dlist.get(key, None)
++        else:
++            new_trie[key[::-1]] = key
++
++    logging.info('MAKE-TRIE: {0} = {1} Entries'.format(listname, len(new_trie)))
++
++    return new_trie
++
++
+ # !!! Include alias, forwarder and forcettl as lists
+ def read_list(filenames, listname, domlst, ip4lst, ip6lst, rxlst, unlst, unip4, unip6, geolst, alst, flst, fttlst):
+     '''Get lists from either file or URL'''
+@@ -498,10 +517,12 @@ def read_list(filenames, listname, domlst, ip4lst, ip6lst, rxlst, unlst, unip4,
+                 for entry in list(filter(None, filter(is_ip6.search, cleanlines))):
+                     ip6lst[addzero(entry)] = entry
+ 
++
+             if ftype is False or ftype == 'DOM':
+                 logging.info('PROCESS-LIST ({0}): Getting DOMAINs...'.format(lname))
+                 domlst.update(dict.fromkeys(list(map(make_dom, filter(None, filter(is_dom.search, cleanlines)))), 'Domain'))
+ 
++
+             if ftype is False or ftype == 'DOMWORD':
+                 logging.info('PROCESS-LIST ({0}): Getting DOMWORDs...'.format(lname))
+                 for entry in list(filter(None, filter(is_domword.search, cleanlines))):
+@@ -512,6 +533,7 @@ def read_list(filenames, listname, domlst, ip4lst, ip6lst, rxlst, unlst, unip4,
+                     except BaseException as err:
+                         logging.warning('LIST [{0}]: Invalid Syntax: \"{1}\" - {2}'.format(lname, entry, err))
+ 
++
+             if ftype is False or ftype == 'GEO':
+                 logging.info('PROCESS-LIST ({0}): Getting GEOs...'.format(lname))
+                 for entry in list(filter(None, filter(is_geo.search, cleanlines))):
+@@ -552,6 +574,7 @@ def read_list(filenames, listname, domlst, ip4lst, ip6lst, rxlst, unlst, unip4,
+                     else:
+                         logging.warning('LIST [{0}]: Invalid ALIAS Syntax: \"{1}\"'.format(lname, entry))
+ 
++
+             if ftype is False or ftype == 'FORWARD':
+                 logging.info('PROCESS-LIST ({0}): Getting FORWARDers...'.format(lname))
+                 for entry in list(filter(None, filter(is_forwarder.search, cleanlines))):
+@@ -563,6 +586,7 @@ def read_list(filenames, listname, domlst, ip4lst, ip6lst, rxlst, unlst, unip4,
+                     else:
+                         logging.warning('LIST [{0}]: Invalid FORWARDER Syntax: \"{1}\"'.format(lname, entry))
+ 
++
+             if ftype is False or ftype == 'TTL':
+                 logging.info('PROCESS-LIST ({0}): Getting TTLs...'.format(lname))
+                 for entry in list(filter(None, filter(is_ttl.search, cleanlines))):
+@@ -876,11 +900,12 @@ def is_formerr(rtype, value, qtype):
+     return False
+ 
+ 
+-def is_blacklisted(value, valuetype, checkip):
++def is_blacklisted(qname, value, valuetype, checkip):
+     '''Check if blacklisted including simple locking'''
+     if config['filtering'] is False:
+         return None
+ 
++
+     testvalue = str(value)
+     if not checkip:
+         testvalue = regex.split('\s+', str(value))[-1].lower() # Get last value
+@@ -899,13 +924,13 @@ def is_blacklisted(value, valuetype, checkip):
+         time.sleep(config['retry_wait'])
+ 
+     if count >= config['retry_count']:
+-        logging.error('{0}-BLACKLIST-FAIL: {1} - Took to long to check'.format(valuetype, testvalue, count))
++        logging.error('{0}-BLACKLIST-FAIL: {1} -> {2} - Took to long to check'.format(valuetype, qname, testvalue))
+         check_cache[cachename] = None
+         return None
+ 
+     beingchecked.add(testvalue)
+ 
+-    result = check_blacklisted(testvalue, valuetype, checkip)
++    result = check_blacklisted(qname, testvalue, valuetype, checkip)
+ 
+     #logging.debug('{0}-CHECK-RESULT: {1} = {2}'.format(valuetype, testvalue, result))
+ 
+@@ -916,15 +941,15 @@ def is_blacklisted(value, valuetype, checkip):
+     return result
+ 
+ 
+-def check_blacklisted(testvalue, valuetype, checkip):
++def check_blacklisted(qname, testvalue, valuetype, checkip):
+     '''Check value is white/black-listed'''
+     orgtestvalue = testvalue
+ 
+-    if config['blockip4'] and ((checkip is False and ip4arpa.search(testvalue)) or (check_ip is True and is_ip4.search(testvalue))):
++    if config['blockip4'] and ((checkip is False and ip4arpa.search(testvalue)) or (checkip is True and is_ip4.search(testvalue))):
+         if config['log_hits']:
+             logging.warning('{0}-IPV4-HIT: {1}'.format(valuetype, testvalue))
+         return True
+-    elif config['blockip6'] and ((checkip is False and ip6arpa.search(testvalue)) or (check_ip is True and is_ip6.search(testvalue))):
++    elif config['blockip6'] and ((checkip is False and ip6arpa.search(testvalue)) or (checkip is True and is_ip6.search(testvalue))):
+         if config['log_hits']:
+              logging.warning('{0}-IPV6-HIT: {1}'.format(valuetype, testvalue))
+         return True
+@@ -932,15 +957,16 @@ def check_blacklisted(testvalue, valuetype, checkip):
+     # Check against domain
+     if checkip is False and is_dom.search(testvalue):
+         #logging.debug('CHECK-{0}: \"{1}\" is a DOMAIN'.format(valuetype, testvalue))
+-        wcheck = check_dom(valuetype, testvalue, wl_dom, 'WHITELIST', False, False) # Whitelisted
++        #wcheck = check_dom(valuetype, testvalue, wl_dom, 'WHITELIST', False, False) # Whitelisted
++        wcheck = check_dom_trie(valuetype, testvalue, wl_dom_trie, 'WHITELIST', False, False) # Whitelisted
+         if wcheck:
+-            if config['block_specific'] and wcheck != testvalue and testvalue in bl_dom:
++            #if config['block_specific'] and wcheck != testvalue and testvalue in bl_dom:
++            if config['block_specific'] and wcheck != testvalue and testvalue[::-1] in bl_dom_trie:
+                 logging.warning('SPECIFIC-NAME-DOM-HIT [BLACKLIST]: \"{0}\" (Parent \"{1}\" is WHITELISTED)'.format(testvalue, wcheck))
+                 return True
+ 
+-            if config['smartdoms'] and check_dom_smart('WHITELIST', testvalue, bl_dom, 'BLACKLIST', True):
+-                #if check_dom_smart('WHITELIST', qname, alias, 'ALIAS', True):
+-                #    return False
++            #if config['smartdoms'] and check_dom_smart('WHITELIST', testvalue, bl_dom, 'BLACKLIST', True):
++            if config['smartdoms'] and check_dom_smart_trie('WHITELIST', testvalue, bl_dom_trie, 'BLACKLIST', True, wcheck):
+                 return True
+             return False
+ 
+@@ -957,8 +983,10 @@ def check_blacklisted(testvalue, valuetype, checkip):
+                     logging.warning('{0}-NXTLD-HIT: {1}'.format(valuetype, testvalue))
+                 return True
+ 
+-        if check_dom(valuetype, testvalue, bl_dom, 'BLACKLIST', False, config['smartdoms']): # Blacklisted
+-            if config['smartdoms'] and check_dom_smart('BLACKLIST', testvalue, alias, 'ALIAS', True):
++        #if check_dom(valuetype, testvalue, bl_dom, 'BLACKLIST', False, config['smartdoms']): # Blacklisted
++        if check_dom_trie(valuetype, testvalue, bl_dom_trie, 'BLACKLIST', False, config['smartdoms']): # Blacklisted
++            #if config['smartdoms'] and check_dom_smart('BLACKLIST', testvalue, alias, 'ALIAS', True):
++            if config['smartdoms'] and check_dom_trie('BLACKLIST', testvalue, alias_trie, 'ALIAS', False, False):
+                 return False
+             return True
+ 
+@@ -982,13 +1010,6 @@ def check_blacklisted(testvalue, valuetype, checkip):
+             testvalue = ip
+ 
+     if checkip:
+-        # Check against GEO
+-        if check_geo(valuetype, testvalue, wl_geo, 'WHITELIST'):
+-            return False
+-
+-        if check_geo(valuetype, testvalue, bl_geo, 'BLACKLIST'):
+-            return True
+-  
+         ip4 = True
+         if testvalue.find(':') > -1:
+             ip4 = False
+@@ -997,12 +1018,13 @@ def check_blacklisted(testvalue, valuetype, checkip):
+         if ip4:
+             #logging.debug('CHECK-{0}: {1} is an IPv4-Address'.format(valuetype, testvalue))
+             # Check if IPv4 is whitelisted
+-            if check_ip(valuetype, testvalue, orgtestvalue, wl_ip4, 'WHITELIST', False):
++            if check_ip(qname, valuetype, testvalue, orgtestvalue, wl_ip4, 'WHITELIST', False):
+                 return False
+ 
+             # Check if IPv4 is blacklisted
+-            if check_ip(valuetype, testvalue, orgtestvalue, bl_ip4, 'BLACKLIST', True):
+-                if rev_check(testvalue, wl_dom, 'WHITELIST'):
++            if check_ip(qname, valuetype, testvalue, orgtestvalue, bl_ip4, 'BLACKLIST', True):
++                #if rev_check(testvalue, wl_dom, 'WHITELIST'):
++                if rev_check_trie(testvalue, wl_dom_trie, 'WHITELIST'):
+                     return False
+                 else:
+                     return True
+@@ -1012,16 +1034,24 @@ def check_blacklisted(testvalue, valuetype, checkip):
+         else:
+             #logging.debug('CHECK-{0}: {1} is an IPv6-Address'.format(valuetype, testvalue))
+             # Check if IPv6 is whitelisted
+-            if check_ip(valuetype, testvalue, orgtestvalue, wl_ip6, 'WHITELIST', False):
++            if check_ip(qname, valuetype, testvalue, orgtestvalue, wl_ip6, 'WHITELIST', False):
+                 return False
+ 
+             # Check if IPv6 is blacklisted
+-            if check_ip(valuetype, testvalue, orgtestvalue, bl_ip6, 'BLACKLIST', True):
+-                if rev_check(testvalue, wl_dom, 'WHITELIST'):
++            if check_ip(qname, valuetype, testvalue, orgtestvalue, bl_ip6, 'BLACKLIST', True):
++                #if rev_check(testvalue, wl_dom, 'WHITELIST'):
++                if rev_check_trie(testvalue, wl_dom_trie, 'WHITELIST'):
+                     return False
+                 else:
+                     return True
+ 
++        # Check against GEO
++        if check_geo(qname, valuetype, testvalue, wl_geo, 'WHITELIST'):
++            return False
++
++        if check_geo(qname, valuetype, testvalue, bl_geo, 'BLACKLIST'):
++            return True
++  
+     # Check against DNSWL/BL
+     if dnsl_check(config['dnswl'], orgtestvalue, checkip):
+         if config['log_hits']:
+@@ -1058,6 +1088,46 @@ def check_rx(valuetype, testvalue, rxlst, rxbiglst, tag):
+ 
+     return False
+ 
++def check_dom_trie(valuetype, testvalue, trielist, listname, onlyparent, smart):
++    #match = trielist.longest_prefix(testvalue[::-1]).key
++    match = trielist.shortest_prefix(testvalue[::-1]).key
++    if match:
++        fqdn = match[::-1]
++
++        if onlyparent and fqdn == testvalue:
++            #check_cache[cachename] = False
++            return False
++        else:
++            if config['log_hits'] and listname:
++                logging.warning('{0}-TRIE-DOM-HIT [{1}]: \"{2}\" -> \"{3}\"'.format(valuetype, listname, testvalue, fqdn))
++            #check_cache[cachename] = fqdn
++            return fqdn
++
++    if smart:
++        return check_dom_smart_trie(valuetype, testvalue, trielist, listname, onlyparent, False)
++
++    return False
++
++
++def check_dom_smart_trie(valuetype, testvalue, trielist, listname, onlyparent, stripdom):
++    if stripdom and testvalue.endswith('.{0}'.format(stripdom)):
++        valuetest = regex.sub('\.{0}$'.format(regex.escape(stripdom)), '.dummy', testvalue)
++    else:
++        valuetest = testvalue.rstrip('.')
++
++    #suffix = ''
++    while valuetest.count('.') > 1:
++        valuetest = '.'.join(valuetest.split('.')[:-1])
++        #match = trielist.longest_prefix('{0}.'.format(valuetest)[::-1]).key
++        match = trielist.shortest_prefix('{0}.'.format(valuetest)[::-1]).key
++        if match and match.count('.') > 1:
++            fqdn = match[::-1]
++            if config['log_hits'] and listname:
++                logging.warning('{0}-TRIE-SMARTDOM-HIT [{1}]: \"{2}\" -> \"{3}\"'.format(valuetype, listname, testvalue, fqdn))
++            return fqdn
++
++    return False
++
+ 
+ def check_dom(valuetype, testvalue, domlist, listname, onlyparent, smart):
+     '''Match domain against list, works for subdomains too'''
+@@ -1136,19 +1206,20 @@ def check_dom_walk(valuetype, testvalue, domlist, listname, onlyparent):
+ #    return False
+ 
+ 
+-def check_ip(valuetype, testvalue, orgtestvalue, iplist, listname, rc):
++def check_ip(qname, valuetype, testvalue, orgtestvalue, iplist, listname, rc):
+     '''Check if IP is listed'''
+     #logging.debug('{0}-CHECK-IP [{1}]: {2}'.format(valuetype, listname, testvalue))
+     if testvalue in iplist:
+         if config['log_hits'] and listname:
+-            logging.warning('{0}-IP-HIT [{1}]: {2} -> {3}'.format(valuetype, listname, orgtestvalue, iplist.get_key(testvalue)))
++            ip = iplist.get_key(testvalue)
++            logging.warning('{0}-IP-HIT [{1}]: {2} -> {3} -> {4} ({5})'.format(valuetype, listname, qname, orgtestvalue, ip, geo(ip)))
+ 
+         return rc
+ 
+     return False
+ 
+ 
+-def check_geo(valuetype, testvalue, geolst, listname):
++def check_geo(qname, valuetype, testvalue, geolst, listname):
+     #logging.debug('{0}-CHECK-GEO [{1}]: {2}'.format(valuetype, listname, testvalue))
+     giploc = '?/?/?/?/{0}'.format(geo(testvalue))
+     city, area, country, continent = tuple(giploc.split('/')[-4:])
+@@ -1158,22 +1229,22 @@ def check_geo(valuetype, testvalue, geolst, listname):
+         # !!! Make nicer/quicker
+         if continent in geolst or 'CONTINENT:{0}'.format(continent) in geolst:
+             if config['log_hits'] and listname:
+-                logging.warning('{0}-GEO-CONTINENT-HIT [{1}]: {2} -> {3} ({4})'.format(valuetype, listname, testvalue, continent, giploc))
++                logging.warning('{0}-GEO-CONTINENT-HIT [{1}]: {2} -> {3} -> {4} ({5})'.format(valuetype, listname, qname, testvalue, continent, giploc))
+             return True
+ 
+         if country in geolst or 'COUNTRY:{0}'.format(country) in geolst:
+             if config['log_hits'] and listname:
+-                logging.warning('{0}-GEO-COUNTRY-HIT [{1}]: {2} -> {3} ({4})'.format(valuetype, listname, testvalue, country, giploc))
++                logging.warning('{0}-GEO-COUNTRY-HIT [{1}]: {2} -> {3} -> {4} ({5})'.format(valuetype, listname, qname, testvalue, country, giploc))
+             return True
+ 
+         if area in geolst or 'AREA:{0}'.format(area) in geolst:
+             if config['log_hits'] and listname:
+-                logging.warning('{0}-GEO-AREA-HIT [{1}]: {2} -> {3} ({4})'.format(valuetype, listname, testvalue, area, giploc))
++                logging.warning('{0}-GEO-AREA-HIT [{1}]: {2} -> {3} -> {4} ({5})'.format(valuetype, listname, qname, testvalue, area, giploc))
+             return True
+ 
+         if city in geolst or 'CITY:{0}'.format(city) in geolst:
+             if config['log_hits'] and listname:
+-                logging.warning('{0}-GEO-CITY-HIT [{1}]: {2} -> {3} ({4})'.format(valuetype, listname, testvalue, city, giploc))
++                logging.warning('{0}-GEO-CITY-HIT [{1}]: {2} -> {3} -> {4} ({5})'.format(valuetype, listname, qname, testvalue, city, giploc))
+             return True
+ 
+         # Multiples
+@@ -1190,7 +1261,7 @@ def check_geo(valuetype, testvalue, geolst, listname):
+ 
+             if gcheck in geolst:
+                 if config['log_hits'] and config['log_verbose'] and listname:
+-                    logging.warning('{0}-GEO-HIT [{1}]: {2} -> {3}'.format(valuetype, listname, testvalue, gcheck))
++                    logging.warning('{0}-GEO-HIT [{1}]: {2} -> {3} -> {4}'.format(valuetype, listname, qname, testvalue, gcheck))
+                 return True
+         
+     return False
+@@ -1201,6 +1272,8 @@ def check_badip(cip):
+     if not config['filtering'] or not is_ip.search(cip):
+         return False
+ 
++    cip = addzero(cip)
++
+     #logging.info('BADIP: Checking {0}'.format(cip))
+ 
+     count = 0
+@@ -1225,11 +1298,11 @@ def check_badip(cip):
+         bl_ip = bl_ip4
+         private = private4
+ 
+-    if check_geo('IP', cip, wl_geo, 'GEO-WHITELIST'):
++    if check_geo('IP', 'IP', cip, wl_geo, 'GEO-WHITELIST'):
+         beingchecked.discard(cip)
+         return False
+ 
+-    if check_geo('IP', cip, bl_geo, 'GEO-BLACKLIST'):
++    if check_geo('IP', 'IP', cip, bl_geo, 'GEO-BLACKLIST'):
+         beingchecked.discard(cip)
+         return True
+ 
+@@ -1245,6 +1318,9 @@ def check_badip(cip):
+         beingchecked.discard(cip)
+         return True
+ 
++    elif cip in private:
++        return False
++
+     elif config['abuseipdbkey']:
+         score = False
+         ipcheck = False
+@@ -1309,6 +1385,24 @@ def check_badip(cip):
+     return False
+ 
+ 
++def rev_check_trie(testvalue, trielist, tag):
++    if config['check_iprev']:
++        arpaip = rev_ip(testvalue, False)
++        if arpaip:
++            #logging.debug('IP-REV-{0}-LOOKUP: {1} = {2}'.format(tag, testvalue, arpaip))
++            qid = random.randint(1025, 65535)
++            rcode, response = dns_query(arpaip, 1, 12, qid, 'IP-REV', True, config['max_ttl'])[0:2] # Check PTR
++            if rcode == 0 and countrr(response) > 0:
++                for rr in response:
++                    target = regex.split('\s+', str(rr))[-1].lower()
++                    if target and is_dom.search(target):
++                        if check_dom_trie('NAME', target, trielist, tag, False, False):
++                            logging.warning('IP-REV-PTR-{0}-HIT: {1} = {2} = {3}'.format(tag, testvalue, arpaip, target))
++                            return True
++
++    return False
++
++
+ def rev_check(testvalue, domlist, tag):
+     if config['check_iprev']:
+         arpaip = rev_ip(testvalue, False)
+@@ -1438,7 +1532,7 @@ def dns_query(name, rdclass, rdtype, qid, cip, unfilter, fttl):
+     # Get from cache
+     qname = str(name)
+     qrdtype = str(dns.rdatatype.to_text(rdtype))
+-    cip = addzero(str(cip))
++    #cip = addzero(str(cip))
+ 
+     cachename = '{0}/IN/{1}'.format(qname, qrdtype)
+ 
+@@ -1446,13 +1540,20 @@ def dns_query(name, rdclass, rdtype, qid, cip, unfilter, fttl):
+     returnstatus = 'OK'
+     blacklistname = False
+ 
++    ip6 = None
++
+     if is_ip.search(cip):
++        if cip.find(':') > -1:
++            ip6 = True
++        else:
++            ip6 = False
++
+         if cip not in private4 and cip not in private6:
+             cachename = '{0}/PUBLIC'.format(cachename)
+ 
+         if config['use_ecs_ip']:
+             tag = 'IP4'
+-            if cip.find(':') > -1:
++            if ip6:
+                 tag = 'IP6'
+ 
+             cachename = '{0}/{1}'.format(cachename, tag)
+@@ -1462,6 +1563,7 @@ def dns_query(name, rdclass, rdtype, qid, cip, unfilter, fttl):
+ 
+     if unfilter:
+         cachename = '{0}/{1}'.format(cachename, cip)
++        logging.info('UNFILTER: {0}'.format(cachename))
+ 
+     # !!! CHECK for smartip-caching, probably already covered by abive IP4/6 tag
+     #if unfilter or config['smartip']:
+@@ -1520,6 +1622,8 @@ def dns_query(name, rdclass, rdtype, qid, cip, unfilter, fttl):
+                 clear_caches()
+ 
+             elif (command in ('HITS', 'STATS')) and (subcommand in ('BLACKLISTED', 'NONE', 'OK', 'WHITELISTED')):
++                logging.info('STATS: Number of entries in cache: {0}'.format(len(cache)))
++                    
+                 count = 0
+                 for entry in sorted(queryhits, key=queryhits.get, reverse=True)[:50]: # Top-50
+                     testvalue = entry.split('/')[0]
+@@ -1621,22 +1725,34 @@ def dns_query(name, rdclass, rdtype, qid, cip, unfilter, fttl):
+ 
+     # Prematch forwarders/aliases to speed things up
+     matcha = False
+-    matchf = check_dom('NAME', qname, forwarder, 'FORWARDER', False, False)
+-    if matchf and unfilter is False and config['filtering'] and config['smartdoms'] and check_dom_smart('FORWARDER', qname, bl_dom, 'BLACKLIST', True):
+-        matchf = False
+-        if config['smartdoms']:
+-            matcha = check_dom_smart('FORWARDER', qname, alias, 'ALIAS', True)
++    matchf = False
++    matchw = wl_dom_trie.shortest_prefix(qname[::-1]).key
++    if matchw:
++        returnstatus = 'WHITELISTED'
++        matchw = matchw[::-1]
++    else:
++        matchw = False
++        #matchf = check_dom('NAME', qname, forwarder, 'FORWARDER', False, False)
++        matchf = check_dom_trie('NAME', qname, forwarder_trie, 'FORWARDER', False, False)
++        #if matchf and unfilter is False and config['filtering'] and config['smartdoms'] and check_dom_smart('FORWARDER', qname, bl_dom, 'BLACKLIST', True):
++        if matchf and (unfilter is False) and config['filtering'] and config['smartdoms'] and check_dom_smart_trie('FORWARDER', qname, bl_dom_trie, 'BLACKLIST', True, matchf):
++            if config['smartdoms']:
++                #matcha = check_dom_smart('FORWARDER', qname, alias, 'ALIAS', True)
++                matcha = check_dom_smart_trie('FORWARDER', qname, alias_trie, 'ALIAS', True, matchf)
++
++            matchf = False
++
++            if matcha is False:
++                blacklistname = qname
++                returnstatus = 'SMARTDOM-BLACKLISTED'
++                rv = (config['blacklist_rcode'], [], [], [])
+ 
++    if rv is None and config['filtering'] and config['filter_request'] and unfilter is False and matchw is False and matchf is False:
+         if matcha is False:
+-            blacklistname = qname
+-            returnstatus = 'SMARTDOM-BLACKLISTED'
+-            rv = (config['blacklist_rcode'], [], [], [])
++            matcha = check_dom_trie('BLACKLISTED', qname, alias_trie, 'ALIAS', False, config['smartdoms'])
+ 
+-    if rv is None and config['filtering'] and config['filter_request'] and unfilter is False and matchf is False:
+         if matcha is False:
+-            #logging.debug('REQUEST-QNAME-CHECK [{0}]: {1}'.format(qid, qname))
+-
+-            wmatch = is_blacklisted(qname, 'NAME', False) # Due first, faster due to caching of previous results
++            wmatch = is_blacklisted(qname, qname, 'NAME', False) # Due first, faster due to caching of previous results
+             if wmatch is True:
+                 blacklistname = qname
+                 returnstatus = 'BLACKLISTED'
+@@ -1659,26 +1775,23 @@ def dns_query(name, rdclass, rdtype, qid, cip, unfilter, fttl):
+                 #rv = (dns.rcode.NOERROR, [], [], []) # Workaround for searchdomains
+                 rv = (config['blacklist_rcode'], [], [], [])
+ 
+-        ip6 = None
+-        if is_ip.search(cip):
+-            if cip.find(':') > -1:
+-                ip6 = True
+-            else:
+-                ip6 = False
+-
+-        if rv is None and (qrdtype in ('A', 'AAAA', 'CNAME')) and ((ip6 is False and cip in private4) or (ip6 is True and cip in private6)):
++        if rv is None and (qrdtype in ('A', 'AAAA', 'CNAME')) and ((ip6 is False and cip in private4) or (ip6 is True and cip in private6)): # Only spoof answers for queries from private clients
+             if matcha:
+                 match = matcha
+             else:
+-                match = check_dom('NAME', qname, alias, 'ALIAS', False, False)
+-                if match is False and config['smartdoms']:
+-                    match = check_dom_smart('ALIAS', qname, alias, 'ALIAS', True)
++                #match = check_dom('NAME', qname, alias, 'ALIAS', False, False)
++                match = check_dom_trie('NAME', qname, alias_trie, 'ALIAS', False, False)
++                #if match is False and config['smartdoms']:
++                #    #match = check_dom_smart('ALIAS', qname, alias, 'ALIAS', True)
++                #    match = check_dom_smart_trie('ALIAS', qname, alias_trie, 'ALIAS', True)
+ 
+             if match:
+-                spoof = alias[match]
++                #spoof = alias[match]
++                spoof = alias_trie[match[::-1]]
+                 if spoof != qname:
+                     count = 0
+-                    while count < config['retry_count'] and (qname in beingspoofed or check_dom('NAME', qname, beingspoofed, 'SPOOFER-CHECKER', False, False)):
++                    #while count < config['retry_count'] and (qname in beingspoofed or check_dom('NAME', qname, beingspoofed, 'SPOOFER-CHECKER', False, False)):
++                    while count < config['retry_count'] and (qname in beingspoofed):
+                         count += 1
+                         #logging.debug('SPOOF-SLEEP: {0} (#{1})'.format(qname, count))
+                         time.sleep(config['retry_wait'])
+@@ -1760,11 +1873,13 @@ def dns_query(name, rdclass, rdtype, qid, cip, unfilter, fttl):
+         fwdtag = None
+         if matchf:
+             fwdtag = 'SELECTIVE'
+-            addrs = roundrobin(forwarder[matchf].split(','), False)
++            #addrs = roundrobin(forwarder[matchf].split(','), False)
++            addrs = roundrobin(forwarder_trie[matchf[::-1]].split(','), False)
+             if cip in addrs:
+                 logging.error('FORWARD-LOOP [{0}]: \"{1}\" from {2} (forwarder for {3})'.format(qid, cachename, cip, matchf))
+                 return (dns.rcode.SERVFAIL, [], [], [])
+-            forwarder[matchf]= ','.join(addrs) # Preserve roundrobin order
++            #forwarder[matchf]= ','.join(addrs) # Preserve roundrobin order
++            forwarder_trie[matchf[::-1]]= ','.join(addrs) # Preserve roundrobin order
+ 
+         else:
+             fwdtag = 'DEFAULT'
+@@ -1807,7 +1922,7 @@ def dns_query(name, rdclass, rdtype, qid, cip, unfilter, fttl):
+                                     blacklistname = rrname
+                                     break
+                                 else:
+-                                    status = is_blacklisted(rrname, 'CHAIN-NAME', False)
++                                    status = is_blacklisted(qname, rrname, 'CHAIN-NAME', False)
+                                     if status is not None:
+                                         if status is True: # Blacklisted
+                                            returnstatus = 'BLACKLISTED'
+@@ -1844,14 +1959,14 @@ def dns_query(name, rdclass, rdtype, qid, cip, unfilter, fttl):
+                                             break
+                                         else:
+                                             if rrdtype in ('A', 'AAAA'):
+-                                                status = is_blacklisted(target, 'DATA', True)
++                                                status = is_blacklisted(rrname, target, 'DATA', True)
+                                             else:
+                                                 if rrdtype == 'CNAME':
+                                                     tag = 'CNAME-CLOAK'
+                                                 else:
+                                                     tag = 'DATA-NAME'
+ 
+-                                                status = is_blacklisted(target, tag, False)
++                                                status = is_blacklisted(rrname, target, tag, False)
+ 
+                                             if status is not None:
+                                                 if status is True: # Blacklisted
+@@ -1945,9 +2060,11 @@ def dns_query(name, rdclass, rdtype, qid, cip, unfilter, fttl):
+                 if blacklistname:
+                     ttl = config['blacklist_ttl']
+                 else:
+-                    match = check_dom('NAME', name, forcettl, 'TTL', False, False)
++                    #match = check_dom('NAME', name, forcettl, 'TTL', False, False)
++                    match = check_dom_trie('NAME', name, forcettl_trie, 'TTL', False, False)
+                     if match:
+-                        ttl = forcettl[match]
++                        #ttl = forcettl[match]
++                        ttl = forcettl_trie[match[::-1]]
+                         logging.info('TTL-OVERRIDE-FORCE [{0}]: Forced to {1} for {2} ({3}) = {4}'.format(qid, ttl, cachename, match, dns.rcode.to_text(rcode)))
+                     else:
+                         ttl = config['rc_ttl']
+@@ -2022,10 +2139,12 @@ def update_ttls(qid, qname, result, left, check):
+     ttl = max(0, left)
+ 
+     if check:
+-        match = check_dom('NAME', qname, forcettl, 'TTL', False, False)
++        #match = check_dom('NAME', qname, forcettl, 'TTL', False, False)
++        match = check_dom_trie('NAME', qname, forcettl_trie, 'TTL', False, False)
+         if match:
+             logging.info('TTL-OVERRIDE-FORCE [{0}]: Forced from {1} to {2} for {3} ({4})'.format(qid, ttl, forcettl[match], qname, match))
+-            ttl = forcettl[match]
++            #ttl = forcettl[match]
++            ttl = forcettl_trie[match[::-1]]
+ 
+         else:
+             lttl = list()
+@@ -2070,8 +2189,11 @@ def dox_request(qid, qname, rdtype, cachename, urls, rfc8484, cip):
+     global requests_session
+ 
+     icip = cip
++    ip6 = False
+     if not is_ip.search(cip):
+         icip = False
++    elif cip.find(':') > -1:
++        ip6 = True
+ 
+     message = dns.message.make_query(encode_0x20(qname), rdtype)
+ 
+@@ -2085,7 +2207,7 @@ def dox_request(qid, qname, rdtype, cachename, urls, rfc8484, cip):
+     if config['use_ecs_ip'] and icip:
+         ccip = cip
+         bits = 0
+-        if cip.find(':') > -1:
++        if ip6 or config['force6']:
+             if config['override_ecs_ip6'] and is_ip6.search(config['override_ecs_ip6']):
+                 ccip = config['override_ecs_ip6']
+             bits = config['ecs_privacy6'] or 48
+@@ -2117,10 +2239,10 @@ def dox_request(qid, qname, rdtype, cachename, urls, rfc8484, cip):
+         af = 10
+         aftag = 'IPv6'
+     elif config['smartip'] and icip:
+-        if rdtype == dns.rdatatype.A or is_ip4.search(cip) or ip4arpa.search(qname):
++        if ip6 is False or rdtype == dns.rdatatype.A or ip4arpa.search(qname):
+             af = 2
+             aftag = 'IPv4'
+-        elif rdtype == dns.rdatatype.AAAA or is_ip6.search(cip) or ip6arpa.search(qname):
++        elif ip6 is True or rdtype == dns.rdatatype.AAAA or ip6arpa.search(qname):
+             af = 10
+             aftag = 'IPv6'
+ 
+@@ -2327,7 +2449,7 @@ def log_helper(qname, qrdtype, result, tag, qid, cip):
+     elif result[2]:
+         ttl = result[2][-1].ttl
+  
+-    rlog = '{0} [{1}]: {2}/IN/{3} {4} = {5} ({6} RRs)'.format(tag, qid, qname, qrdtype, ttl, rcode, countrv(result))
++    rlog = '{0} [{1}]: {2}/IN/{3} {4} = {5} (ANS: {6}, AUT: {7}, ADD: {8} RRs)'.format(tag, qid, qname, qrdtype, ttl, rcode, len(result[1]), len(result[2]), len(result[3]))
+     if cip:
+         rlog = '{0} to {1}'.format(rlog, cip)
+ 
+@@ -2431,7 +2553,7 @@ def handle_query(raw_data, client_ip):
+     #logging.debug('GEO-IP: {0} - {1}'.format(client_ip, geo(client_ip)))
+ 
+     name = str(query.question[0].name).lower()
+-    cip = str(client_ip)
++    cip = addzero(str(client_ip))
+     rdclass = query.question[0].rdclass
+     rdclasst = dns.rdataclass.to_text(rdclass)
+     rdtype = query.question[0].rdtype
+@@ -2483,7 +2605,8 @@ def handle_query(raw_data, client_ip):
+ 
+         unfilter = False
+ 
+-        if config['unfilter'] and (check_dom('NAME', name, forwarder, 'FORWARDER', False, False) is False):
++        #if config['unfilter'] and (check_dom('NAME', name, forwarder, 'FORWARDER', False, False) is False):
++        if config['unfilter'] and (check_dom_trie('NAME', name, forwarder_trie, 'FORWARDER', False, False) is False):
+             if cip in unfilter_cache or name in unfilter_cache:
+                 unfilter = True
+ 
+@@ -2493,7 +2616,8 @@ def handle_query(raw_data, client_ip):
+                 unfilter_cache.add(obj=CachedObject(name=cip, obj=True, ttl=604800)) # 7 days
+ 
+             else:
+-                match = check_dom('NAME', name, ul_dom, 'UNFILTER', False, False)
++                #match = check_dom('NAME', name, ul_dom, 'UNFILTER', False, False)
++                match = check_dom_trie('NAME', name, ul_dom_trie, 'UNFILTER', False, False)
+                 if match:
+                     unfilter = True
+                     unfilter_cache.add(obj=CachedObject(name=name, obj=True, ttl=config['unfilter_ttl']))
+@@ -3025,14 +3149,14 @@ if __name__ == '__main__':
+         private4['192.168.0.0/16'] = 'Private'
+ 
+         # Whitelist Local/Private IPv6's
+-        private6['::1/128'] = 'Private'
++        private6['0::1/128'] = 'Private'
+         private6['fc00::/7'] = 'Private'
+         private6['fe80::/10'] = 'Private'
+ 
+         for addr in config['private_addrs']:
+             if addr.find(':') > -1:
+                 if addr not in private6:
+-                    private6[addr] = 'Private'
++                    private6[addzero(addr)] = 'Private'
+             else:
+                 if addr not in private4:
+                     private4[addr] = 'Private'
+@@ -3080,6 +3204,27 @@ if __name__ == '__main__':
+             logging.info('LIST-TOTALS [BLACKLIST]: {0} Domains, {1} IPv4-Addresses, {2} IPv6-Addresses and {3} Regexes'.format(len(bl_dom), len(bl_ip4), len(bl_ip6), len(bl_rx)))
+             logging.info('LIST-TOTALS [GENERIC]: {0} Aliases, {1} Selective-Forwarders, {2} TTLs, {3} UnlistDoms, {4} UnlistIP4s and {5} UnlistIP6s'.format(len(alias), len(forwarder), len(forcettl), len(ul_dom), len(ul_ip4), len(ul_ip6)))
+ 
++
++    wl_dom_trie = make_trie(wl_dom, 'Whitelist', False)
++    del wl_dom
++
++    bl_dom_trie = make_trie(bl_dom, 'Blacklist', False)
++    del bl_dom
++
++    alias_trie = make_trie(alias, 'Alias', True)
++    del alias
++
++    forwarder_trie = make_trie(forwarder, 'Forwarder', True)
++    del forwarder
++
++    forcettl_trie = make_trie(forcettl, 'ForceTTL', True)
++    del forcettl
++
++    ul_dom_trie = make_trie(ul_dom, 'Unfilter', False)
++    del ul_dom
++
++    gc.collect() # Collect garbage
++
+     # Setup nameservers
+     setup_nameservers()
+ 
+diff --git a/requirements.txt b/requirements.txt
+index 6a861f6..736ed76 100644
+--- a/requirements.txt
++++ b/requirements.txt
+@@ -6,7 +6,7 @@ geoip2>=2.9.0
+ hyper>=0.7.0
+ idna>=2.8
+ IPy>=1.0
+-#pygtrie>=2.3.3         
++pygtrie>=2.3.3
+ python-hosts>=0.4.7         
+ pytricia>=1.0.0
+ regex>=2019.6.8
