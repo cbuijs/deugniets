@@ -1,0 +1,15 @@
+cachetools>=3.1.1         
+chardet==3.0.4 # Latest version supported by requests
+clientsubnetoption>=2.1.1
+dnspython>=2.0.0
+geoip2>=2.9.0         
+#hyper>=0.7.0
+idna>=2.8
+ip2location>=8.4.1
+IPy>=1.0
+netaddr>=0.7.19
+pygtrie>=2.3.3
+python-hosts>=0.4.7         
+pytricia>=1.0.0
+regex>=2019.6.8
+requests>=2.22.0
