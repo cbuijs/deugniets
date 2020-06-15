@@ -1,0 +1,21 @@
+# CAUTION: USE THIS FILE CAREFULLY AND REVIEW IT FIRST BEFORE USING!!!
+
+# Alias/Spoof
+test1.chrisbuijs.com. = NXDOMAIN
+test2.chrisbuijs.com. = REFUSED
+test3.chrisbuijs.com. = 1.2.3.4, 9.8.7.6, 192.168.1.1
+test4.chrisbuijs.com. = 2001::1, 1234:abcd::9999
+test5.chrisbuijs.com. = blocked.home.
+test6.chrisbuijs.com. = RANDOM
+test7.chrisbuijs.com. = www.google.com.
+
+# Spoof time-servers to europe
+pool.ntp.org. = nl.pool.ntp.org.
+time.google.com. = nl.pool.ntp.org.
+time.apple.com. = nl.pool.ntp.org.
+time.windows.com. = nl.pool.ntp.org.
+
+# Selective Forwarders
+home. > 192.168.1.1
+1.168.192.in-addr.arpa. > 192.168.1.1
+orange.fr > 192.168.1.1
